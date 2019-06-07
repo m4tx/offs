@@ -1,0 +1,33 @@
+[package]
+name = "offs-client"
+version = "0.1.0"
+authors = ["Mateusz Maćkowski <m4tx@m4tx.pl>"]
+edition = "2018"
+
+readme = "../README.md"
+license = "MIT"
+homepage = "https://github.com/m4tx/offs"
+repository = "https://github.com/m4tx/offs"
+description = "Distributed file system with offline work support (client library)"
+
+[badges]
+travis-ci = { repository = "m4tx/offs", branch = "master" }
+
+[dependencies]
+offs = { path = "../liboffs" }
+
+capnp = "0.9.5"
+capnp-rpc = "0.9.0"
+futures = "0.1.26"
+tokio = "0.1"
+rusqlite = "0.18.0"
+
+fuse = "0.3.1"
+libc = "0.2.51"
+time = "0.1.42"
+
+clap = "2.33.0"
+dbus = "0.6.4"
+nix = "0.14.0"
+ctrlc = "3.1.2"
+itertools = "0.8.0"

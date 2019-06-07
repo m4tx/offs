@@ -1,0 +1,11 @@
+[workspace]
+
+members = [
+    "liboffs",
+    "client",
+    "clientctl",
+    "server",
+]
+
+[profile.release]
+lto = true

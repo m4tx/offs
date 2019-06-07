@@ -1,0 +1,27 @@
+[package]
+name = "offs-server"
+version = "0.1.0"
+authors = ["Mateusz Maćkowski <m4tx@m4tx.pl>"]
+edition = "2018"
+
+readme = "../README.md"
+license = "MIT"
+homepage = "https://github.com/m4tx/offs"
+repository = "https://github.com/m4tx/offs"
+description = "Distributed file system with offline work support (server binary)"
+
+[badges]
+travis-ci = { repository = "m4tx/offs", branch = "master" }
+
+[dependencies]
+offs = { path = "../liboffs" }
+
+capnp = "0.9.5"
+capnp-rpc = "0.9.0"
+futures = "0.1.26"
+tokio = "0.1"
+
+time = "0.1.42"
+
+itertools = "0.8.0"
+clap = "2.33.0"

@@ -1,0 +1,11 @@
+[package]
+name = "offs-clientctl"
+version = "0.1.0"
+authors = ["Mateusz Maćkowski <m4tx@m4tx.pl>"]
+edition = "2018"
+
+[dependencies]
+offs = { path = "../liboffs" }
+
+clap = "2.33.0"
+dbus = "0.6.4"

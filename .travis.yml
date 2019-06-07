@@ -1,0 +1,16 @@
+language: rust
+
+sudo: required
+dist: xenial
+python: "3.6"
+rust:
+  - stable
+  - beta
+  - nightly
+
+matrix:
+  allow_failures:
+    - rust: nightly
+
+before_install:
+  - sudo apt-get install capnproto libfuse2 libfuse-dev libsqlite3-dev libdbus-1-dev -y
