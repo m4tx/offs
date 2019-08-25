@@ -16,9 +16,11 @@ travis-ci = { repository = "m4tx/offs", branch = "master" }
 
 [build-dependencies]
 capnpc = "0.10.1"
+protoc-grpcio = "1.0.2"
 
 [dependencies]
 capnp = "0.10.1"
+grpcio = "0.4.4"
 
 time = "0.1.42"
 

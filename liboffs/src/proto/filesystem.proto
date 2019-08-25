@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package filesystem;
+
+
+enum FileType {
+    NAMED_PIPE = 0;
+    CHAR_DEVICE = 1;
+    BLOCK_DEVICE = 2;
+    DIRECTORY = 3;
+    REGULAR_FILE = 4;
+    SYMLINK = 5;
+    SOCKET = 6;
+}
+
+message Timespec {
+    int64 sec = 1;
+    int32 nsec = 2;
+}
+
+message Stat {
+    uint64 ino = 1; // Inode number
+    FileType file_type = 2; // File type and mode
+    uint32 perm = 3;
+    uint64 nlink = 4; // Number of hard links
+    uint32 uid = 5; // User ID of owner
+    uint32 gid = 6; // Group ID of owner
+    uint64 size = 7; // Total size, in bytes
+    uint64 blocks = 8; // Number of 512B blocks allocated
+    Timespec atim = 9; // Time of last access
+    Timespec mtim = 10; // Time of last modification
+    Timespec ctim = 11; // Time of last status change
+}
+
+message DirEntity {
+    string id = 1;
+    string parent = 2;
+    string name = 3;
+
+    int64 dirent_version = 4;
+    int64 content_version = 5;
+
+    Stat stat = 6;
+}
+
+message Blob {
+    string id = 1;
+    bytes content = 2;
+}
+
+message ModifyOperation {
+    // ID of the file the operation is made on. In case of create(File|Directory)
+    // this is the ID of the parent directory of the newly created entity
+    string id = 1;
+
+    Timespec timestamp = 2;
+
+    int64 dirent_version = 3;
+    int64 content_version = 4;
+
+    oneof operation {
+        CreateFileOperation create_file = 5;
+        CreateSymlinkOperation create_symlink = 6;
+        CreateDirectoryOperation create_directory = 7;
+
+        RemoveFileOperation remove_file = 8;
+        RemoveDirectoryOperation remove_directory = 9;
+
+        RenameOperation rename = 10;
+        SetAttributesOperation set_attributes = 11;
+        WriteOperation write = 12;
+    }
+}
+
+message CreateFileOperation {
+    string name = 1;
+    FileType file_type = 2;
+    uint32 perm = 3;
+    uint32 dev = 4;
+}
+
+message CreateSymlinkOperation {
+    string name = 1;
+    string link = 2;
+}
+
+message CreateDirectoryOperation {
+    string name = 1;
+    uint32 perm = 2;
+}
+
+message RemoveFileOperation {
+}
+
+message RemoveDirectoryOperation {
+}
+
+message RenameOperation {
+    string new_parent = 1;
+    string new_name = 2;
+}
+
+message SetAttributesOperation {
+    uint32 perm = 1;
+    uint32 uid = 2;
+    uint32 gid = 3;
+    uint64 size = 4;
+    Timespec atim = 5;
+    Timespec mtim = 6;
+}
+
+message WriteOperation {
+    int64 offset = 1;
+    bytes data = 2;
+}
+
+
+service RemoteFS {
+    rpc List (ListRequest) returns (stream DirEntity);
+    rpc ListChunks (ListChunksRequest) returns (ListChunksResult);
+    rpc GetBlobs (GetBlobsRequest) returns (stream Blob);
+
+    rpc ApplyOperation (ModifyOperation) returns (DirEntity);
+    rpc ApplyJournal (ApplyJournalRequest) returns (ApplyJournalResponse);
+    rpc MissingBlobs (GetMissingBlobsRequest) returns (GetMissingBlobsResult);
+}
+
+message ListRequest {
+    string id = 1;
+}
+
+message ListChunksRequest {
+    string id = 1;
+}
+
+message ListChunksResult {
+    repeated string blob_id = 1;
+}
+
+message GetBlobsRequest {
+    repeated string id = 1;
+}
+
+message FileChunks {
+    repeated string chunks = 1;
+}
+
+message FileChunkList {
+    repeated FileChunks files = 1;
+}
+
+message ApplyJournalRequest {
+    repeated ModifyOperation operations = 1;
+    repeated FileChunkList chunks = 2;
+    repeated bytes blobs = 3;
+}
+
+message InvalidJournalError {
+}
+
+message ConflictingFilesError {
+    repeated string ids = 1;
+}
+
+message MissingBlobsError {
+    repeated string ids = 1;
+}
+
+message ApplyJournalResponse {
+    repeated string assigned_ids = 1;
+    repeated DirEntity dir_entities = 2;
+
+    oneof error {
+        InvalidJournalError invalid_journal = 3;
+        ConflictingFilesError conflicting_files = 4;
+        MissingBlobsError missing_blobs = 5;
+    }
+}
+
+message GetMissingBlobsRequest {
+    repeated string id = 1;
+}
+
+message GetMissingBlobsResult {
+    repeated string blob_id = 1;
+}
