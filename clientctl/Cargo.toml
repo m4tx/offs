@@ -8,4 +8,4 @@ edition = "2018"
 offs = { path = "../liboffs" }
 
 clap = "2.33.0"
-dbus = "0.6.4"
+dbus = "0.6.5"
