@@ -13,4 +13,4 @@ matrix:
     - rust: nightly
 
 before_install:
-  - sudo apt-get install capnproto libfuse2 libfuse-dev libsqlite3-dev libdbus-1-dev -y
+  - sudo apt-get install protobuf-compiler libfuse2 libfuse-dev libsqlite3-dev libdbus-1-dev -y

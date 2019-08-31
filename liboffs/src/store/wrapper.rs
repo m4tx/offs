@@ -8,6 +8,7 @@ use crate::store::id_generator::IdGenerator;
 use crate::store::{FileDev, FileMode, FileType, Store};
 use crate::BLOB_SIZE;
 
+#[derive(Clone)]
 pub struct StoreWrapper<T: IdGenerator> {
     pub inner: Store<T>,
 }

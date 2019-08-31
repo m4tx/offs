@@ -1,40 +1,36 @@
+use std::io::Read;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::{io, thread};
 
-use capnp_rpc::{rpc_twoparty_capnp, twoparty, RpcSystem};
-use futures::{Future, Stream};
-use tokio::io::AsyncRead;
-use tokio::runtime::current_thread;
+use futures::sync::oneshot;
+use futures::Future;
+use grpcio::{Environment, ServerBuilder};
 
-use offs::filesystem_capnp::remote_fs_proto;
+use offs::proto::filesystem_grpc::create_remote_fs;
 use offs::store::id_generator::RandomHexIdGenerator;
 use offs::store::Store;
 
 use crate::remote_fs::RemoteFs;
 
 pub fn run_server(store: Store<RandomHexIdGenerator>, address: SocketAddr) {
-    let socket = ::tokio::net::TcpListener::bind(&address).unwrap();
-
-    let client =
-        remote_fs_proto::ToClient::new(RemoteFs::new(store)).into_client::<::capnp_rpc::Server>();
-
-    let done = socket.incoming().for_each(move |socket| {
-        socket.set_nodelay(true)?;
-        let (reader, writer) = socket.split();
-
-        let network = twoparty::VatNetwork::new(
-            reader,
-            std::io::BufWriter::new(writer),
-            rpc_twoparty_capnp::Side::Server,
-            Default::default(),
-        );
-
-        let rpc_system = RpcSystem::new(Box::new(network), Some(client.clone().client));
-        current_thread::spawn(rpc_system.map_err(|e| println!("error: {:?}", e)));
-
-        Ok(())
+    let env = Arc::new(Environment::new(1));
+    let service = create_remote_fs(RemoteFs::new(store));
+    let mut server = ServerBuilder::new(env)
+        .register_service(service)
+        .bind(format!("{}", address.ip()), address.port())
+        .build()
+        .unwrap();
+    server.start();
+    for &(ref host, port) in server.bind_addrs() {
+        println!("listening on {}:{}", host, port);
+    }
+    let (tx, rx) = oneshot::channel();
+    thread::spawn(move || {
+        println!("Press ENTER to exit...");
+        let _ = io::stdin().read(&mut [0]).unwrap();
+        tx.send(())
     });
-
-    println!("Server listening on {}", address);
-
-    current_thread::block_on_all(done).unwrap();
+    let _ = rx.wait();
+    let _ = server.shutdown().wait();
 }

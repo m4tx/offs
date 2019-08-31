@@ -1,7 +1,10 @@
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
 use digest::Digest;
+use rusqlite::types::Null;
 use rusqlite::{params, Connection, Row, ToSql, NO_PARAMS};
 use sha2::Sha256;
 use time::Timespec;
@@ -10,15 +13,16 @@ use crate::store::id_generator::{LocalTempIdGenerator, RandomHexIdGenerator};
 use crate::{ROOT_ID, SQLITE_CACHE_SIZE, SQLITE_PAGE_SIZE};
 
 use self::id_generator::IdGenerator;
-pub use self::types::{DirEntity, FileDev, FileMode, FileStat, FileType, ProtoFill};
-use rusqlite::types::Null;
+pub use self::types::{DirEntity, FileDev, FileMode, FileStat, FileType};
 
 pub mod id_generator;
 mod types;
 pub mod wrapper;
 
 pub struct Store<T: IdGenerator> {
-    connection: Rc<Connection>,
+    connection: Arc<Mutex<Connection>>,
+    db_path: PathBuf,
+
     id_generator: T,
 }
 
@@ -33,6 +37,8 @@ impl Store<RandomHexIdGenerator> {
 
     pub fn increment_dirent_version(&mut self, id: &str) {
         self.connection
+            .lock()
+            .unwrap()
             .execute(
                 "UPDATE file SET dirent_version = dirent_version + 1 WHERE id = ?",
                 params![id],
@@ -42,6 +48,8 @@ impl Store<RandomHexIdGenerator> {
 
     pub fn increment_content_version(&mut self, id: &str) {
         self.connection
+            .lock()
+            .unwrap()
             .execute(
                 r#"
                 UPDATE file
@@ -64,17 +72,19 @@ impl Store<LocalTempIdGenerator> {
 
         store
             .connection
+            .lock()
+            .unwrap()
             .execute_batch(include_str!("sql/init_client.sql"))
             .unwrap();
         let next_id = store.get_next_temp_id();
-        store.id_generator.next_id = next_id;
+        store.id_generator.next_id.store(next_id, Ordering::Relaxed);
 
         store
     }
 
     fn get_next_temp_id(&mut self) -> usize {
-        let mut stmt = self
-            .connection
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
             .prepare("SELECT id FROM file WHERE id LIKE 'temp-%' ORDER BY id DESC LIMIT 1")
             .unwrap();
         let mut rows = stmt.query(NO_PARAMS).unwrap();
@@ -87,8 +97,8 @@ impl Store<LocalTempIdGenerator> {
     }
 
     pub fn get_temp_chunks(&mut self) -> Vec<String> {
-        let mut stmt = self
-            .connection
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
             .prepare(
                 r#"
                 SELECT DISTINCT blob
@@ -104,12 +114,14 @@ impl Store<LocalTempIdGenerator> {
     }
 
     pub fn get_temp_file_ids(&self) -> impl Iterator<Item = String> {
-        (0..self.id_generator.next_id).map(|x| LocalTempIdGenerator::get_nth_id(x))
+        let val = self.id_generator.next_id.load(Ordering::Relaxed);
+
+        (0..val).map(|x| LocalTempIdGenerator::get_nth_id(x))
     }
 
     pub fn add_journal_entry(&self, id: &str, operation: &[u8]) -> i64 {
-        let mut stmt = self
-            .connection
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
             .prepare("INSERT INTO journal (file, operation) VALUES (?, ?)")
             .unwrap();
 
@@ -117,10 +129,8 @@ impl Store<LocalTempIdGenerator> {
     }
 
     pub fn get_journal(&self) -> Vec<Vec<u8>> {
-        let mut stmt = self
-            .connection
-            .prepare("SELECT operation FROM journal")
-            .unwrap();
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection.prepare("SELECT operation FROM journal").unwrap();
         let iter = stmt
             .query_map(NO_PARAMS, |row| Ok(row.get(0).unwrap()))
             .unwrap();
@@ -130,6 +140,8 @@ impl Store<LocalTempIdGenerator> {
 
     pub fn clear_journal(&mut self) {
         self.connection
+            .lock()
+            .unwrap()
             .execute("DELETE FROM journal", NO_PARAMS)
             .unwrap();
         self.id_generator.reset_generator();
@@ -137,12 +149,16 @@ impl Store<LocalTempIdGenerator> {
 
     pub fn remove_file_from_journal(&self, id: &str) {
         self.connection
+            .lock()
+            .unwrap()
             .execute("DELETE FROM journal WHERE file = ?", params![id])
             .unwrap();
     }
 
     pub fn remove_journal_item(&self, id: i64) {
         self.connection
+            .lock()
+            .unwrap()
             .execute("DELETE FROM journal WHERE id = ?", params![id])
             .unwrap();
     }
@@ -156,6 +172,8 @@ impl Store<LocalTempIdGenerator> {
 
     pub fn update_retrieved_version(&self, id: &str) {
         self.connection
+            .lock()
+            .unwrap()
             .execute(
                 "UPDATE file SET retrieved_version = content_version WHERE id = ?",
                 params![id],
@@ -180,7 +198,8 @@ impl Store<LocalTempIdGenerator> {
             args_str
         );
 
-        let mut stmt = self.connection.prepare(&query).unwrap();
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection.prepare(&query).unwrap();
         let params =
             std::iter::once(parent_id.to_owned()).chain(iter.map(|x| x.as_ref().to_owned()));
 
@@ -190,6 +209,26 @@ impl Store<LocalTempIdGenerator> {
 
 impl<IdT: IdGenerator> Store<IdT> {
     pub fn new(db_path: impl AsRef<std::path::Path>, id_generator: IdT) -> Self {
+        let cloned_db_path = db_path.as_ref().to_owned();
+        let connection = Self::create_connection(db_path);
+
+        connection
+            .execute_batch(include_str!("sql/init.sql"))
+            .unwrap();
+
+        let store = Self {
+            connection: Arc::new(Mutex::new(connection)),
+            db_path: cloned_db_path,
+
+            id_generator,
+        };
+
+        store.run_gc();
+
+        store
+    }
+
+    fn create_connection(db_path: impl AsRef<std::path::Path>) -> Connection {
         let connection = Connection::open(db_path).unwrap();
 
         connection
@@ -206,17 +245,6 @@ impl<IdT: IdGenerator> Store<IdT> {
             .unwrap();
 
         connection
-            .execute_batch(include_str!("sql/init.sql"))
-            .unwrap();
-
-        let store = Self {
-            connection: Rc::new(connection),
-            id_generator,
-        };
-
-        store.run_gc();
-
-        store
     }
 
     pub fn reset_id_generator(&mut self) {
@@ -253,8 +281,8 @@ impl<IdT: IdGenerator> Store<IdT> {
     }
 
     pub fn list_files(&self, parent_id: &str) -> Vec<DirEntity> {
-        let mut stmt = self
-            .connection
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
             .prepare("SELECT * FROM file WHERE parent = ?")
             .unwrap();
         let iter = stmt
@@ -265,24 +293,24 @@ impl<IdT: IdGenerator> Store<IdT> {
     }
 
     pub fn file_exists(&self, id: &str) -> bool {
-        let mut stmt = self
-            .connection
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
             .prepare("SELECT 1 FROM file WHERE id = ?")
             .unwrap();
         stmt.exists(params![id]).unwrap()
     }
 
     pub fn file_exists_by_name(&self, parent_id: &str, name: &str) -> bool {
-        let mut stmt = self
-            .connection
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
             .prepare("SELECT 1 FROM file WHERE parent = ? AND name = ?")
             .unwrap();
         stmt.exists(params![parent_id, name]).unwrap()
     }
 
     pub fn query_file(&self, id: &str) -> Option<DirEntity> {
-        let mut stmt = self
-            .connection
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
             .prepare("SELECT * FROM file WHERE id = ?")
             .unwrap();
         let mut rows = stmt.query(params![id]).unwrap();
@@ -295,8 +323,8 @@ impl<IdT: IdGenerator> Store<IdT> {
     }
 
     pub fn query_file_by_name(&self, parent_id: &str, name: &str) -> Option<DirEntity> {
-        let mut stmt = self
-            .connection
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
             .prepare("SELECT * FROM file WHERE parent = ? AND name = ?")
             .unwrap();
         let mut rows = stmt.query(params![parent_id, name]).unwrap();
@@ -310,6 +338,8 @@ impl<IdT: IdGenerator> Store<IdT> {
 
     pub fn resize_file(&self, id: &str, size: u64) {
         self.connection
+            .lock()
+            .unwrap()
             .execute(
                 "UPDATE file SET size = ? WHERE id = ?",
                 params![size as i64, id],
@@ -355,6 +385,8 @@ impl<IdT: IdGenerator> Store<IdT> {
         };
 
         self.connection
+            .lock()
+            .unwrap()
             .execute(
                 r#"INSERT OR IGNORE INTO file (
                  id, parent, name, dirent_version, content_version,
@@ -380,6 +412,8 @@ impl<IdT: IdGenerator> Store<IdT> {
             )
             .unwrap();
         self.connection
+            .lock()
+            .unwrap()
             .execute(
                 r#"
                 UPDATE file
@@ -453,6 +487,8 @@ impl<IdT: IdGenerator> Store<IdT> {
         };
 
         self.connection
+            .lock()
+            .unwrap()
             .execute(
                 "INSERT INTO file (\
                  id, parent, name, dirent_version, content_version,\
@@ -484,19 +520,23 @@ impl<IdT: IdGenerator> Store<IdT> {
 
     pub fn remove_file(&self, id: &str) {
         self.connection
+            .lock()
+            .unwrap()
             .execute("DELETE FROM file WHERE id = ?", params![id])
             .unwrap();
     }
 
     pub fn remove_directory(&self, id: &str) {
         self.connection
+            .lock()
+            .unwrap()
             .execute("DELETE FROM file WHERE id = ?", params![id])
             .unwrap();
     }
 
     pub fn get_chunks(&self, id: &str) -> Vec<String> {
-        let mut stmt = self
-            .connection
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
             .prepare(r#"SELECT blob FROM chunk WHERE file = ? ORDER BY "index""#)
             .unwrap();
 
@@ -519,7 +559,8 @@ impl<IdT: IdGenerator> Store<IdT> {
 
         let args_str = itertools::join((0..iter.len()).into_iter().map(|_x| "?"), ", ");
         let query = "SELECT * FROM blob WHERE id IN (".to_owned() + &args_str + ")";
-        let mut stmt = self.connection.prepare(&query).unwrap();
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection.prepare(&query).unwrap();
         let mut rows = stmt.query(iter.map(|x| x.as_ref().to_owned())).unwrap();
 
         while let Some(row) = rows.next().unwrap() {
@@ -555,7 +596,8 @@ impl<IdT: IdGenerator> Store<IdT> {
             r#"SELECT t.id FROM ({}) AS t LEFT JOIN blob ON t.id = blob.id WHERE blob.id IS NULL;"#,
             args_str
         );
-        let mut stmt = self.connection.prepare(&query).unwrap();
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection.prepare(&query).unwrap();
 
         let rows = stmt
             .query_map(ids_iter.map(|x| x.as_ref().to_owned()), |row| {
@@ -582,6 +624,8 @@ impl<IdT: IdGenerator> Store<IdT> {
         let id = Self::get_blob_id(data);
 
         self.connection
+            .lock()
+            .unwrap()
             .execute(
                 "INSERT OR IGNORE INTO blob (id, content) VALUES (?, ?)",
                 params![id, data],
@@ -591,9 +635,9 @@ impl<IdT: IdGenerator> Store<IdT> {
         id
     }
 
-    pub fn add_blobs<'a>(&self, blobs: impl IntoIterator<Item = &'a [u8]>) {
+    pub fn add_blobs(&self, blobs: impl IntoIterator<Item = impl AsRef<[u8]>>) {
         for blob in blobs {
-            self.add_blob(blob);
+            self.add_blob(blob.as_ref());
         }
     }
 
@@ -609,6 +653,8 @@ impl<IdT: IdGenerator> Store<IdT> {
 
     pub fn replace_chunk(&self, id: &str, index: usize, blob_id: &str) {
         self.connection
+            .lock()
+            .unwrap()
             .execute(
                 r#"INSERT OR REPLACE INTO chunk (file, blob, "index") VALUES (?, ?, ?)"#,
                 params![id, blob_id, index as i64],
@@ -618,6 +664,8 @@ impl<IdT: IdGenerator> Store<IdT> {
 
     pub fn truncate_chunks(&self, id: &str, remove_since_id: usize) {
         self.connection
+            .lock()
+            .unwrap()
             .execute(
                 r#"DELETE FROM chunk WHERE file = ? AND "index" >= ?"#,
                 params![id, remove_since_id as i64],
@@ -688,11 +736,17 @@ impl<IdT: IdGenerator> Store<IdT> {
         let args_str = itertools::join(columns.iter().map(|x| format!("{} = ?", x)), ", ");
         let query = format!("UPDATE file SET {} WHERE id = ?", args_str);
 
-        self.connection.execute(&query, &values).unwrap();
+        self.connection
+            .lock()
+            .unwrap()
+            .execute(&query, &values)
+            .unwrap();
     }
 
     pub fn rename(&self, id: &str, new_parent: &str, new_name: &str) {
         self.connection
+            .lock()
+            .unwrap()
             .execute(
                 "UPDATE file SET parent = ?, name = ? WHERE id = ?",
                 params![new_parent, new_name, id],
@@ -701,13 +755,14 @@ impl<IdT: IdGenerator> Store<IdT> {
     }
 
     pub fn change_id(&self, old_id: &str, new_id: &str) {
-        self.connection
+        let connection = self.connection.lock().unwrap();
+        connection
             .execute(
                 "UPDATE file SET id = ? WHERE id = ?",
                 params![new_id, old_id],
             )
             .unwrap();
-        self.connection
+        connection
             .execute(
                 "UPDATE chunk SET file = ? WHERE file = ?",
                 params![new_id, old_id],
@@ -717,6 +772,8 @@ impl<IdT: IdGenerator> Store<IdT> {
 
     pub fn run_gc(&self) {
         self.connection
+            .lock()
+            .unwrap()
             .execute(
                 r#"
                 DELETE
@@ -733,14 +790,27 @@ impl<IdT: IdGenerator> Store<IdT> {
     }
 }
 
+impl<IdT: IdGenerator> Clone for Store<IdT> {
+    fn clone(&self) -> Self {
+        return Self {
+            connection: Arc::new(Mutex::new(Self::create_connection(&self.db_path))),
+            db_path: self.db_path.clone(),
+
+            id_generator: self.id_generator.clone(),
+        };
+    }
+}
+
 pub struct Transaction {
-    connection: Rc<Connection>,
+    connection: Arc<Mutex<Connection>>,
     committed: bool,
 }
 
 impl Transaction {
-    fn new(connection: Rc<Connection>) -> Self {
+    fn new(connection: Arc<Mutex<Connection>>) -> Self {
         connection
+            .lock()
+            .unwrap()
             .execute("BEGIN", NO_PARAMS)
             .expect("Cannot start transaction");
 
@@ -752,7 +822,7 @@ impl Transaction {
 
     pub fn commit(mut self) -> Result<usize, rusqlite::Error> {
         self.committed = true;
-        self.connection.execute("COMMIT", NO_PARAMS)
+        self.connection.lock().unwrap().execute("COMMIT", NO_PARAMS)
     }
 }
 
@@ -760,6 +830,8 @@ impl Drop for Transaction {
     fn drop(&mut self) {
         if !self.committed {
             self.connection
+                .lock()
+                .unwrap()
                 .execute("ROLLBACK", NO_PARAMS)
                 .expect("Could not rollback transaction");
         }

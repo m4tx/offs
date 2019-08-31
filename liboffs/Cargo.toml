@@ -15,12 +15,12 @@ description = "Distributed file system with offline work support (common library
 travis-ci = { repository = "m4tx/offs", branch = "master" }
 
 [build-dependencies]
-capnpc = "0.10.1"
 protoc-grpcio = "1.0.2"
 
 [dependencies]
-capnp = "0.10.1"
 grpcio = "0.4.4"
+protobuf = "2.8.0"
+futures = "0.1.28"
 
 time = "0.1.42"
 

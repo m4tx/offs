@@ -4,27 +4,29 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use capnp::serialize_packed;
-use capnp_rpc::{rpc_twoparty_capnp, twoparty, RpcSystem};
 use fuse::FileAttr;
-use futures::Future;
+use itertools::Itertools;
 use libc::{S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S_IFREG, S_IFSOCK};
+use protobuf::{parse_from_bytes, Message};
 use time::Timespec;
-use tokio::io::AsyncRead;
 
-use offs::errors::OperationApplyError;
-use offs::filesystem_capnp::modify_operation as ops;
-use offs::filesystem_capnp::remote_fs_proto;
+use offs::errors::{JournalApplyData, OperationApplyError};
+use offs::modify_op::{
+    CreateDirectoryOperation, CreateFileOperation, CreateSymlinkOperation, ModifyOperation,
+    RemoveDirectoryOperation, RemoveFileOperation, RenameOperation, SetAttributesOperation,
+    WriteOperation as ModifyOpWriteOperation,
+};
 use offs::modify_op_handler::{OperationApplier, OperationHandler};
+use offs::now;
+use offs::proto::filesystem as proto_types;
 use offs::store::id_generator::LocalTempIdGenerator;
 use offs::store::wrapper::StoreWrapper;
 use offs::store::{DirEntity, FileDev, FileMode, FileType, Store};
-use offs::{now, serialize_message};
 
+use crate::remote_fs_client::client::grpc_client::RemoteFsGrpcClient;
 use crate::remote_fs_client::client::modify_op_builder::ModifyOpBuilder;
 use crate::remote_fs_client::error::{RemoteFsError, RemoteFsErrorKind};
 
-use self::client::RemoteFsClient;
 use self::write_buffer::{WriteBuffer, WriteOperation};
 
 mod client;
@@ -49,7 +51,7 @@ macro_rules! check_online {
 }
 
 pub struct OffsFilesystem {
-    client: RemoteFsClient,
+    client: RemoteFsGrpcClient,
     offline_mode: Arc<AtomicBool>,
     should_flush_journal: Arc<AtomicBool>,
 
@@ -67,10 +69,8 @@ impl OffsFilesystem {
         should_flush_journal: Arc<AtomicBool>,
         store: Store<LocalTempIdGenerator>,
     ) -> Self {
-        let (runtime, client) = Self::connect_rpc(address);
-
         let mut fs = Self {
-            client: RemoteFsClient::new(runtime, client),
+            client: RemoteFsGrpcClient::new(&format!("{}", address)),
             offline_mode,
             should_flush_journal,
 
@@ -90,34 +90,6 @@ impl OffsFilesystem {
         }
 
         fs
-    }
-
-    fn connect_rpc(
-        address: SocketAddr,
-    ) -> (
-        ::tokio::runtime::current_thread::Runtime,
-        remote_fs_proto::Client,
-    ) {
-        let mut runtime = ::tokio::runtime::current_thread::Runtime::new().unwrap();
-
-        let stream = runtime
-            .block_on(::tokio::net::TcpStream::connect(&address))
-            .unwrap();
-        stream.set_nodelay(true).unwrap();
-        let (reader, writer) = stream.split();
-
-        let network = Box::new(twoparty::VatNetwork::new(
-            reader,
-            std::io::BufWriter::new(writer),
-            rpc_twoparty_capnp::Side::Client,
-            Default::default(),
-        ));
-        let mut rpc_system = RpcSystem::new(network, None);
-        let client: remote_fs_proto::Client =
-            rpc_system.bootstrap(rpc_twoparty_capnp::Side::Server);
-        runtime.spawn(rpc_system.map_err(|_e| ()));
-
-        (runtime, client)
     }
 
     fn convert_file_type(store_file_type: FileType) -> fuse::FileType {
@@ -222,31 +194,24 @@ impl OffsFilesystem {
         self.offline_mode.load(Ordering::Relaxed)
     }
 
-    fn prepare_and_send_journal(&mut self) -> (Vec<String>, Vec<DirEntity>) {
+    fn prepare_and_send_journal(&mut self) -> JournalApplyData {
         let blobs_used = self.store.inner.get_temp_chunks();
         let mut blob_ids_to_send = self.client.get_server_missing_blobs(blobs_used);
 
         loop {
             let journal = self.store.inner.get_journal();
             if journal.is_empty() {
-                return (Default::default(), Default::default());
+                return Default::default();
             }
 
-            let readers: Vec<capnp::message::Reader<capnp::serialize::OwnedSegments>> = journal
+            let ops: Vec<ModifyOperation> = journal
                 .into_iter()
                 .map(|x| {
-                    let mut vec_slice: &[u8] = &x;
-                    serialize_packed::read_message(
-                        &mut vec_slice,
-                        ::capnp::message::ReaderOptions::new(),
-                    )
-                    .unwrap()
+                    let parsed: proto_types::ModifyOperation = parse_from_bytes(&x).unwrap();
+
+                    parsed.into()
                 })
-                .collect();
-            let ops: Vec<ops::Reader> = readers
-                .iter()
-                .map(|reader| reader.get_root::<ops::Reader>().unwrap())
-                .collect();
+                .collect_vec();
 
             let chunks: Vec<Vec<String>> = self
                 .store
@@ -257,16 +222,17 @@ impl OffsFilesystem {
 
             let blobs_to_send = self.store.inner.get_blobs(&blob_ids_to_send);
 
-            let result = self
-                .client
-                .apply_journal(&ops, chunks, blobs_to_send.values());
+            let result = self.client.apply_journal(
+                ops,
+                chunks,
+                blobs_to_send.into_iter().map(|(_, v)| v).collect_vec(),
+            );
 
             if result.is_ok() {
                 return result.ok().unwrap();
             }
 
             match result.err().unwrap() {
-                OperationApplyError::None => unreachable!(),
                 OperationApplyError::InvalidJournal => {
                     panic!("The file operation journal is corrupted");
                 }
@@ -280,21 +246,23 @@ impl OffsFilesystem {
                         let dirent = self.store.inner.query_file(&new_id).unwrap();
                         let parent_dirent = self.store.inner.query_file(&dirent.parent).unwrap();
 
-                        let mut message = Self::init_message();
-                        ModifyOpBuilder::make_recreate_file_op(
-                            &mut message,
-                            &parent_dirent,
-                            &dirent,
+                        let recreate_file_op =
+                            ModifyOpBuilder::make_recreate_file_op(&parent_dirent, &dirent);
+                        let recreate_file_op_proto: proto_types::ModifyOperation =
+                            recreate_file_op.into();
+                        self.store.inner.add_journal_entry(
+                            &dirent.parent,
+                            &recreate_file_op_proto.write_to_bytes().unwrap(),
                         );
-                        self.store
-                            .inner
-                            .add_journal_entry(&dirent.parent, &serialize_message(message));
 
-                        let mut message = Self::init_message();
-                        ModifyOpBuilder::make_reset_attributes_op(&mut message, &dirent);
-                        self.store
-                            .inner
-                            .add_journal_entry(&new_id, &serialize_message(message));
+                        let reset_attributes_op =
+                            ModifyOpBuilder::make_reset_attributes_op(&dirent);
+                        let recreate_file_op_proto: proto_types::ModifyOperation =
+                            reset_attributes_op.into();
+                        self.store.inner.add_journal_entry(
+                            &new_id,
+                            &recreate_file_op_proto.write_to_bytes().unwrap(),
+                        );
                     }
 
                     transaction.commit().unwrap();
@@ -307,10 +275,13 @@ impl OffsFilesystem {
     }
 
     fn apply_journal(&mut self) {
-        let (assigned_ids, dirents) = self.prepare_and_send_journal();
+        let JournalApplyData {
+            assigned_ids,
+            dir_entities,
+        } = self.prepare_and_send_journal();
         self.should_flush_journal.store(false, Ordering::Relaxed);
 
-        if assigned_ids.is_empty() && dirents.is_empty() {
+        if assigned_ids.is_empty() && dir_entities.is_empty() {
             return;
         }
 
@@ -321,7 +292,7 @@ impl OffsFilesystem {
                 .inner
                 .change_id(&LocalTempIdGenerator::get_nth_id(i), id);
         }
-        for mut dirent in dirents {
+        for mut dirent in dir_entities {
             self.add_dirent(&mut dirent);
         }
         self.store.inner.clear_journal();
@@ -382,7 +353,7 @@ impl OffsFilesystem {
         Ok(())
     }
 
-    fn retrieve_missing_blobs<T: AsRef<str>>(&mut self, ids: &[T]) -> Result<()> {
+    fn retrieve_missing_blobs(&mut self, ids: Vec<String>) -> Result<()> {
         if !ids.is_empty() {
             check_online!(self);
 
@@ -400,41 +371,34 @@ impl OffsFilesystem {
 
     fn read(&mut self, id: &str, offset: i64, size: u32) -> Result<Vec<u8>> {
         let missing_blobs = self.store.get_missing_blobs_for_read(id, offset, size);
-        self.retrieve_missing_blobs(&missing_blobs)?;
+        self.retrieve_missing_blobs(missing_blobs)?;
 
         Ok(self.store.read(id, offset, size))
     }
 
     // Modifications
 
-    fn init_message() -> ::capnp::message::Builder<::capnp::message::HeapAllocator> {
-        ::capnp::message::Builder::new_default()
-    }
-
-    fn apply_operation(&mut self, operation: ops::Reader) -> String {
+    fn apply_operation(&mut self, operation: &ModifyOperation) -> String {
         OperationApplier::apply_operation(self, operation)
             .ok()
             .unwrap()
     }
 
-    fn perform_operation<A: ::capnp::message::Allocator>(
-        &mut self,
-        message: &capnp::message::Builder<A>,
-    ) -> Result<DirEntity> {
+    fn perform_operation(&mut self, operation: ModifyOperation) -> Result<DirEntity> {
         if self.should_flush_journal.load(Ordering::Relaxed) {
             self.apply_journal();
         }
 
-        let operation: ops::Reader = message.get_root_as_reader().unwrap();
-        let id = operation.get_id().unwrap();
+        let id = operation.id.clone();
         let transaction = self.store.inner.transaction();
 
-        let new_id = self.apply_operation(operation);
+        let op_proto: proto_types::ModifyOperation = operation.into();
+        let serialized_op = op_proto.write_to_bytes().unwrap();
+        let operation: ModifyOperation = op_proto.into();
 
-        let mut serialized_op = Vec::new();
-        serialize_packed::write_message(&mut serialized_op, &message).unwrap();
+        let new_id = self.apply_operation(&operation);
 
-        let journal_entry_id = self.store.inner.add_journal_entry(id, &serialized_op);
+        let journal_entry_id = self.store.inner.add_journal_entry(&id, &serialized_op);
         let dirent = if self.is_offline() {
             self.query_file(&new_id)?
         } else {
@@ -465,29 +429,21 @@ impl OffsFilesystem {
         mode: FileMode,
         dev: FileDev,
     ) -> Result<DirEntity> {
-        let mut message = Self::init_message();
         let parent_dirent = self.query_file(parent_id)?;
-        ModifyOpBuilder::make_create_file_op(
-            &mut message,
-            &parent_dirent,
-            name,
-            file_type,
-            mode,
-            dev,
-        );
+        let operation =
+            ModifyOpBuilder::make_create_file_op(&parent_dirent, name, file_type, mode, dev);
 
-        let mut dirent = self.perform_operation(&message)?;
+        let mut dirent = self.perform_operation(operation)?;
         self.add_dirent(&mut dirent);
 
         Ok(dirent)
     }
 
     fn create_symlink(&mut self, parent_id: &str, name: &str, link: &str) -> Result<DirEntity> {
-        let mut message = Self::init_message();
         let parent_dirent = self.query_file(parent_id)?;
-        ModifyOpBuilder::make_create_symlink_op(&mut message, &parent_dirent, name, link);
+        let operation = ModifyOpBuilder::make_create_symlink_op(&parent_dirent, name, link);
 
-        let mut dirent = self.perform_operation(&message)?;
+        let mut dirent = self.perform_operation(operation)?;
         self.add_dirent(&mut dirent);
 
         Ok(dirent)
@@ -499,11 +455,10 @@ impl OffsFilesystem {
         name: &str,
         mode: FileMode,
     ) -> Result<DirEntity> {
-        let mut message = Self::init_message();
         let parent_dirent = self.query_file(parent_id)?;
-        ModifyOpBuilder::make_create_directory_op(&mut message, &parent_dirent, name, mode);
+        let operation = ModifyOpBuilder::make_create_directory_op(&parent_dirent, name, mode);
 
-        let mut dirent = self.perform_operation(&message)?;
+        let mut dirent = self.perform_operation(operation)?;
         self.add_dirent(&mut dirent);
 
         Ok(dirent)
@@ -511,32 +466,29 @@ impl OffsFilesystem {
 
     // Remove
     fn remove_file(&mut self, id: &str) -> Result<()> {
-        let mut message = Self::init_message();
         let dirent = self.query_file(id)?;
-        ModifyOpBuilder::make_remove_file_op(&mut message, &dirent);
+        let operation = ModifyOpBuilder::make_remove_file_op(&dirent);
 
-        self.perform_operation(&message)?;
+        self.perform_operation(operation)?;
 
         Ok(())
     }
 
     fn remove_directory(&mut self, id: &str) -> Result<()> {
-        let mut message = Self::init_message();
         let dirent = self.query_file(id)?;
-        ModifyOpBuilder::make_remove_directory_op(&mut message, &dirent);
+        let operation = ModifyOpBuilder::make_remove_directory_op(&dirent);
 
-        self.perform_operation(&message)?;
+        self.perform_operation(operation)?;
 
         Ok(())
     }
 
     // Modify
     fn rename_file(&mut self, id: &str, new_parent: &str, new_name: &str) -> Result<DirEntity> {
-        let mut message = Self::init_message();
         let dirent = self.query_file(id)?;
-        ModifyOpBuilder::make_rename_op(&mut message, &dirent, new_parent, new_name);
+        let operation = ModifyOpBuilder::make_rename_op(&dirent, new_parent, new_name);
 
-        let mut dirent = self.perform_operation(&message)?;
+        let mut dirent = self.perform_operation(operation)?;
         self.add_dirent(&mut dirent);
 
         Ok(dirent)
@@ -552,20 +504,11 @@ impl OffsFilesystem {
         atime: Option<Timespec>,
         mtime: Option<Timespec>,
     ) -> Result<DirEntity> {
-        let mut message = Self::init_message();
         let dirent = self.query_file(id)?;
-        ModifyOpBuilder::make_set_attributes_op(
-            &mut message,
-            &dirent,
-            mode,
-            uid,
-            gid,
-            size,
-            atime,
-            mtime,
-        );
+        let operation =
+            ModifyOpBuilder::make_set_attributes_op(&dirent, mode, uid, gid, size, atime, mtime);
 
-        let mut dirent = self.perform_operation(&message)?;
+        let mut dirent = self.perform_operation(operation)?;
         self.add_dirent(&mut dirent);
 
         Ok(dirent)
@@ -594,11 +537,10 @@ impl OffsFilesystem {
     }
 
     fn do_single_write(&mut self, op: WriteOperation) -> Result<()> {
-        let mut message = Self::init_message();
         let dirent = self.query_file(&op.id)?;
-        ModifyOpBuilder::make_write_op(&mut message, &dirent, op.offset as i64, &op.data);
+        let operation = ModifyOpBuilder::make_write_op(&dirent, op.offset as i64, op.data);
 
-        let mut dirent = self.perform_operation(&message)?;
+        let mut dirent = self.perform_operation(operation)?;
         self.add_dirent(&mut dirent);
 
         Ok(())
@@ -610,65 +552,82 @@ impl OperationHandler for OffsFilesystem {
         &mut self,
         parent_id: &str,
         timestamp: Timespec,
-        name: &str,
-        file_type: FileType,
-        mode: FileMode,
-        dev: FileDev,
+        operation: &CreateFileOperation,
     ) -> String {
-        self.store
-            .create_file(parent_id, timestamp, name, file_type, mode, dev)
+        self.store.create_file(
+            parent_id,
+            timestamp,
+            &operation.name,
+            operation.file_type,
+            operation.perm,
+            operation.dev,
+        )
     }
 
     fn perform_create_symlink(
         &mut self,
         parent_id: &str,
         timestamp: Timespec,
-        name: &str,
-        link: &str,
+        operation: &CreateSymlinkOperation,
     ) -> String {
-        self.store.create_symlink(parent_id, timestamp, name, link)
+        self.store
+            .create_symlink(parent_id, timestamp, &operation.name, &operation.link)
     }
 
     fn perform_create_directory(
         &mut self,
         parent_id: &str,
         timestamp: Timespec,
-        name: &str,
-        mode: FileMode,
+        operation: &CreateDirectoryOperation,
     ) -> String {
         self.store
-            .create_directory(parent_id, timestamp, name, mode)
+            .create_directory(parent_id, timestamp, &operation.name, operation.perm)
     }
 
-    fn perform_remove_file(&mut self, id: &str, timestamp: Timespec) {
+    fn perform_remove_file(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        _operation: &RemoveFileOperation,
+    ) {
         self.store.remove_file(id, timestamp);
     }
 
-    fn perform_remove_directory(&mut self, id: &str, timestamp: Timespec) {
+    fn perform_remove_directory(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        _operation: &RemoveDirectoryOperation,
+    ) {
         self.store.remove_directory(id, timestamp);
     }
 
-    fn perform_rename(&mut self, id: &str, timestamp: Timespec, new_parent: &str, new_name: &str) {
-        self.store.rename(id, timestamp, new_parent, new_name);
+    fn perform_rename(&mut self, id: &str, timestamp: Timespec, operation: &RenameOperation) {
+        self.store
+            .rename(id, timestamp, &operation.new_parent, &operation.new_name);
     }
 
     fn perform_set_attributes(
         &mut self,
         id: &str,
         timestamp: Timespec,
-        mode: Option<FileMode>,
-        uid: Option<u32>,
-        gid: Option<u32>,
-        size: Option<u64>,
-        atim: Option<Timespec>,
-        mtim: Option<Timespec>,
+        operation: &SetAttributesOperation,
     ) {
-        self.store
-            .set_attributes(id, timestamp, mode, uid, gid, size, atim, mtim);
+        self.store.set_attributes(
+            id,
+            timestamp,
+            operation.perm,
+            operation.uid,
+            operation.gid,
+            operation.size,
+            operation.atim,
+            operation.mtim,
+        );
     }
 
-    fn perform_write(&mut self, id: &str, timestamp: Timespec, offset: usize, data: &[u8]) {
-        self.store.write(id, timestamp, offset, data);
+    fn perform_write(&mut self, id: &str, timestamp: Timespec, operation: &ModifyOpWriteOperation) {
+        self.store
+            .write(id, timestamp, operation.offset as usize, &operation.data);
     }
 }
 

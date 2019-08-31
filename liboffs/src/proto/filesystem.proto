@@ -100,11 +100,19 @@ message RenameOperation {
     string new_name = 2;
 }
 
+message UInt32Value {
+    uint32 value = 1;
+}
+
+message UInt64Value {
+    uint64 value = 1;
+}
+
 message SetAttributesOperation {
-    uint32 perm = 1;
-    uint32 uid = 2;
-    uint32 gid = 3;
-    uint64 size = 4;
+    UInt32Value perm = 1;
+    UInt32Value uid = 2;
+    UInt32Value gid = 3;
+    UInt64Value size = 4;
     Timespec atim = 5;
     Timespec mtim = 6;
 }
@@ -122,7 +130,7 @@ service RemoteFS {
 
     rpc ApplyOperation (ModifyOperation) returns (DirEntity);
     rpc ApplyJournal (ApplyJournalRequest) returns (ApplyJournalResponse);
-    rpc MissingBlobs (GetMissingBlobsRequest) returns (GetMissingBlobsResult);
+    rpc GetMissingBlobs (GetMissingBlobsRequest) returns (GetMissingBlobsResult);
 }
 
 message ListRequest {
@@ -145,13 +153,9 @@ message FileChunks {
     repeated string chunks = 1;
 }
 
-message FileChunkList {
-    repeated FileChunks files = 1;
-}
-
 message ApplyJournalRequest {
     repeated ModifyOperation operations = 1;
-    repeated FileChunkList chunks = 2;
+    repeated FileChunks chunks = 2;
     repeated bytes blobs = 3;
 }
 

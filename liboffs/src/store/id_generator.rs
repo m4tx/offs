@@ -1,13 +1,17 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 use itertools::Itertools;
 use rand::distributions::Standard;
 use rand::Rng;
 
-pub trait IdGenerator {
+pub trait IdGenerator: Clone {
     fn generate_id(&mut self) -> String;
 
     fn reset_generator(&mut self) {}
 }
 
+#[derive(Clone)]
 pub struct RandomHexIdGenerator;
 
 impl RandomHexIdGenerator {
@@ -27,13 +31,16 @@ impl IdGenerator for RandomHexIdGenerator {
     }
 }
 
+#[derive(Clone)]
 pub struct LocalTempIdGenerator {
-    pub next_id: usize,
+    pub next_id: Arc<AtomicUsize>,
 }
 
 impl LocalTempIdGenerator {
     pub fn new() -> Self {
-        Self { next_id: 0 }
+        Self {
+            next_id: Arc::new(AtomicUsize::new(0)),
+        }
     }
 
     pub fn get_nth_id(n: usize) -> String {
@@ -53,13 +60,13 @@ impl LocalTempIdGenerator {
 
 impl IdGenerator for LocalTempIdGenerator {
     fn generate_id(&mut self) -> String {
-        let result = Self::get_nth_id(self.next_id);
-        self.next_id += 1;
+        let result = Self::get_nth_id(self.next_id.load(Ordering::Relaxed));
+        self.next_id.fetch_add(1, Ordering::Relaxed);
 
         result
     }
 
     fn reset_generator(&mut self) {
-        self.next_id = 0;
+        self.next_id.store(0, Ordering::Relaxed);
     }
 }

@@ -2,8 +2,11 @@ use std::result;
 
 use time::Timespec;
 
-use crate::filesystem_capnp::modify_operation as ops;
-use crate::store::{FileDev, FileMode, FileType};
+use crate::modify_op::{
+    CreateDirectoryOperation, CreateFileOperation, CreateSymlinkOperation, ModifyOperation,
+    ModifyOperationContent, RemoveDirectoryOperation, RemoveFileOperation, RenameOperation,
+    SetAttributesOperation, WriteOperation,
+};
 
 pub enum OperationError {
     InvalidOperation,
@@ -17,47 +20,47 @@ pub trait OperationHandler {
         &mut self,
         parent_id: &str,
         timestamp: Timespec,
-        name: &str,
-        file_type: FileType,
-        mode: FileMode,
-        dev: FileDev,
+        operation: &CreateFileOperation,
     ) -> String;
 
     fn perform_create_symlink(
         &mut self,
         parent_id: &str,
         timestamp: Timespec,
-        name: &str,
-        link: &str,
+        operation: &CreateSymlinkOperation,
     ) -> String;
 
     fn perform_create_directory(
         &mut self,
         parent_id: &str,
         timestamp: Timespec,
-        name: &str,
-        mode: FileMode,
+        operation: &CreateDirectoryOperation,
     ) -> String;
 
-    fn perform_remove_file(&mut self, id: &str, timestamp: Timespec);
+    fn perform_remove_file(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        operation: &RemoveFileOperation,
+    );
 
-    fn perform_remove_directory(&mut self, id: &str, timestamp: Timespec);
+    fn perform_remove_directory(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        operation: &RemoveDirectoryOperation,
+    );
 
-    fn perform_rename(&mut self, id: &str, timestamp: Timespec, new_parent: &str, new_name: &str);
+    fn perform_rename(&mut self, id: &str, timestamp: Timespec, operation: &RenameOperation);
 
     fn perform_set_attributes(
         &mut self,
         id: &str,
         timestamp: Timespec,
-        mode: Option<FileMode>,
-        uid: Option<u32>,
-        gid: Option<u32>,
-        size: Option<u64>,
-        atim: Option<Timespec>,
-        mtim: Option<Timespec>,
+        operation: &SetAttributesOperation,
     );
 
-    fn perform_write(&mut self, id: &str, timestamp: Timespec, offset: usize, data: &[u8]);
+    fn perform_write(&mut self, id: &str, timestamp: Timespec, operation: &WriteOperation);
 
     fn deferred_create_file(
         &mut self,
@@ -65,10 +68,7 @@ pub trait OperationHandler {
         _timestamp: Timespec,
         _dirent_version: i64,
         _content_version: i64,
-        _name: &str,
-        _file_type: FileType,
-        _mode: FileMode,
-        _dev: FileDev,
+        _operation: &CreateFileOperation,
     ) -> Result<String> {
         unimplemented!()
     }
@@ -79,8 +79,7 @@ pub trait OperationHandler {
         _timestamp: Timespec,
         _dirent_version: i64,
         _content_version: i64,
-        _name: &str,
-        _link: &str,
+        _operation: &CreateSymlinkOperation,
     ) -> Result<String> {
         unimplemented!()
     }
@@ -91,8 +90,7 @@ pub trait OperationHandler {
         _timestamp: Timespec,
         _dirent_version: i64,
         _content_version: i64,
-        _name: &str,
-        _mode: FileMode,
+        _operation: &CreateDirectoryOperation,
     ) -> Result<String> {
         unimplemented!()
     }
@@ -103,6 +101,7 @@ pub trait OperationHandler {
         _timestamp: Timespec,
         _dirent_version: i64,
         _content_version: i64,
+        _operation: &RemoveFileOperation,
     ) -> Result<()> {
         unimplemented!()
     }
@@ -113,6 +112,7 @@ pub trait OperationHandler {
         _timestamp: Timespec,
         _dirent_version: i64,
         _content_version: i64,
+        _operation: &RemoveDirectoryOperation,
     ) -> Result<()> {
         unimplemented!()
     }
@@ -123,8 +123,7 @@ pub trait OperationHandler {
         _timestamp: Timespec,
         _dirent_version: i64,
         _content_version: i64,
-        _new_parent: &str,
-        _new_name: &str,
+        _operation: &RenameOperation,
     ) -> Result<()> {
         unimplemented!()
     }
@@ -135,12 +134,7 @@ pub trait OperationHandler {
         _timestamp: Timespec,
         _dirent_version: i64,
         _content_version: i64,
-        _mode: Option<FileMode>,
-        _uid: Option<u32>,
-        _gid: Option<u32>,
-        _size: Option<u64>,
-        _atim: Option<Timespec>,
-        _mtim: Option<Timespec>,
+        _operation: &SetAttributesOperation,
     ) -> Result<()> {
         unimplemented!()
     }
@@ -151,8 +145,7 @@ pub trait OperationHandler {
         _timestamp: Timespec,
         _dirent_version: i64,
         _content_version: i64,
-        _offset: usize,
-        _data: &[u8],
+        _operation: &WriteOperation,
     ) -> Result<()> {
         unimplemented!()
     }
@@ -161,47 +154,34 @@ pub trait OperationHandler {
 pub struct OperationApplier;
 
 impl OperationApplier {
-    const DEFAULT_MODE: FileMode = std::u16::MAX;
-    const DEFAULT_UID: u32 = std::u32::MAX;
-    const DEFAULT_GID: u32 = std::u32::MAX;
-    const DEFAULT_SIZE: u64 = std::u64::MAX;
-
-    fn check_default_value<T: PartialEq>(value: T, default: T) -> Option<T> {
-        if value == default {
-            None
-        } else {
-            Some(value)
-        }
-    }
-
     pub fn apply_operation<T: OperationHandler>(
         handler: &mut T,
-        operation: ops::Reader,
+        operation: &ModifyOperation,
     ) -> Result<String> {
         Self::apply_operation_internal(handler, operation, false)
     }
 
     pub fn apply_operation_deferred<T: OperationHandler>(
         handler: &mut T,
-        operation: ops::Reader,
+        operation: &ModifyOperation,
     ) -> Result<String> {
         Self::apply_operation_internal(handler, operation, true)
     }
 
     fn apply_operation_internal<T: OperationHandler>(
         handler: &mut T,
-        operation: ops::Reader,
+        operation: &ModifyOperation,
         deferred: bool,
     ) -> Result<String> {
-        let id: &str = operation.get_id().unwrap();
-        let timestamp: Timespec = operation.get_timestamp().unwrap().into();
-        let dirent_version: i64 = operation.get_dirent_version();
-        let content_version: i64 = operation.get_content_version();
+        let id: &str = &operation.id;
+        let timestamp: Timespec = operation.timestamp.into();
+        let dirent_version: i64 = operation.dirent_version;
+        let content_version: i64 = operation.content_version;
 
         let mut new_id = id.to_owned();
 
-        match operation.which().unwrap() {
-            ops::CreateFile(params) => {
+        match &operation.operation {
+            ModifyOperationContent::CreateFileOperation(op) => {
                 new_id = Self::create_file_op(
                     handler,
                     deferred,
@@ -209,10 +189,10 @@ impl OperationApplier {
                     timestamp,
                     dirent_version,
                     content_version,
-                    params,
+                    op,
                 )?
             }
-            ops::CreateSymlink(params) => {
+            ModifyOperationContent::CreateSymlinkOperation(op) => {
                 new_id = Self::create_symlink_op(
                     handler,
                     deferred,
@@ -220,10 +200,10 @@ impl OperationApplier {
                     timestamp,
                     dirent_version,
                     content_version,
-                    params,
+                    op,
                 )?
             }
-            ops::CreateDirectory(params) => {
+            ModifyOperationContent::CreateDirectoryOperation(op) => {
                 new_id = Self::create_directory_op(
                     handler,
                     deferred,
@@ -231,53 +211,53 @@ impl OperationApplier {
                     timestamp,
                     dirent_version,
                     content_version,
-                    params,
+                    op,
                 )?
             }
-            ops::RemoveFile(params) => Self::remove_file_op(
+            ModifyOperationContent::RemoveFileOperation(op) => Self::remove_file_op(
                 handler,
                 deferred,
                 id,
                 timestamp,
                 dirent_version,
                 content_version,
-                params,
+                op,
             )?,
-            ops::RemoveDirectory(params) => Self::remove_directory_op(
+            ModifyOperationContent::RemoveDirectoryOperation(op) => Self::remove_directory_op(
                 handler,
                 deferred,
                 id,
                 timestamp,
                 dirent_version,
                 content_version,
-                params,
+                op,
             )?,
-            ops::Rename(params) => Self::rename_op(
+            ModifyOperationContent::RenameOperation(op) => Self::rename_op(
                 handler,
                 deferred,
                 id,
                 timestamp,
                 dirent_version,
                 content_version,
-                params,
+                op,
             )?,
-            ops::SetAttributes(params) => Self::set_attributes_op(
+            ModifyOperationContent::SetAttributesOperation(op) => Self::set_attributes_op(
                 handler,
                 deferred,
                 id,
                 timestamp,
                 dirent_version,
                 content_version,
-                params,
+                op,
             )?,
-            ops::Write(params) => Self::write_op(
+            ModifyOperationContent::WriteOperation(op) => Self::write_op(
                 handler,
                 deferred,
                 id,
                 timestamp,
                 dirent_version,
                 content_version,
-                params,
+                op,
             )?,
         }
 
@@ -291,26 +271,12 @@ impl OperationApplier {
         timestamp: Timespec,
         dirent_version: i64,
         content_version: i64,
-        params: ops::create_file::Reader,
+        operation: &CreateFileOperation,
     ) -> Result<String> {
-        let name = params.get_name().unwrap();
-        let file_type = params.get_file_type().unwrap().into();
-        let mode = params.get_mode();
-        let dev = params.get_dev();
-
         if deferred {
-            handler.deferred_create_file(
-                id,
-                timestamp,
-                dirent_version,
-                content_version,
-                name,
-                file_type,
-                mode,
-                dev,
-            )
+            handler.deferred_create_file(id, timestamp, dirent_version, content_version, operation)
         } else {
-            Ok(handler.perform_create_file(id, timestamp, name, file_type, mode, dev))
+            Ok(handler.perform_create_file(id, timestamp, operation))
         }
     }
 
@@ -321,22 +287,18 @@ impl OperationApplier {
         timestamp: Timespec,
         dirent_version: i64,
         content_version: i64,
-        params: ops::create_symlink::Reader,
+        operation: &CreateSymlinkOperation,
     ) -> Result<String> {
-        let name = params.get_name().unwrap();
-        let link = params.get_link().unwrap();
-
         if deferred {
             handler.deferred_create_symlink(
                 id,
                 timestamp,
                 dirent_version,
                 content_version,
-                name,
-                link,
+                operation,
             )
         } else {
-            Ok(handler.perform_create_symlink(id, timestamp, name, link))
+            Ok(handler.perform_create_symlink(id, timestamp, operation))
         }
     }
 
@@ -347,22 +309,18 @@ impl OperationApplier {
         timestamp: Timespec,
         dirent_version: i64,
         content_version: i64,
-        params: ops::create_directory::Reader,
+        operation: &CreateDirectoryOperation,
     ) -> Result<String> {
-        let name = params.get_name().unwrap();
-        let mode = params.get_mode();
-
         if deferred {
             handler.deferred_create_directory(
                 id,
                 timestamp,
                 dirent_version,
                 content_version,
-                name,
-                mode,
+                operation,
             )
         } else {
-            Ok(handler.perform_create_directory(id, timestamp, name, mode))
+            Ok(handler.perform_create_directory(id, timestamp, operation))
         }
     }
 
@@ -373,12 +331,12 @@ impl OperationApplier {
         timestamp: Timespec,
         dirent_version: i64,
         content_version: i64,
-        _params: ops::remove_file::Reader,
+        operation: &RemoveFileOperation,
     ) -> Result<()> {
         if deferred {
-            handler.deferred_remove_file(id, timestamp, dirent_version, content_version)
+            handler.deferred_remove_file(id, timestamp, dirent_version, content_version, operation)
         } else {
-            Ok(handler.perform_remove_file(id, timestamp))
+            Ok(handler.perform_remove_file(id, timestamp, operation))
         }
     }
 
@@ -389,12 +347,18 @@ impl OperationApplier {
         timestamp: Timespec,
         dirent_version: i64,
         content_version: i64,
-        _params: ops::remove_directory::Reader,
+        operation: &RemoveDirectoryOperation,
     ) -> Result<()> {
         if deferred {
-            handler.deferred_remove_directory(id, timestamp, dirent_version, content_version)
+            handler.deferred_remove_directory(
+                id,
+                timestamp,
+                dirent_version,
+                content_version,
+                operation,
+            )
         } else {
-            Ok(handler.perform_remove_directory(id, timestamp))
+            Ok(handler.perform_remove_directory(id, timestamp, operation))
         }
     }
 
@@ -405,22 +369,12 @@ impl OperationApplier {
         timestamp: Timespec,
         dirent_version: i64,
         content_version: i64,
-        params: ops::rename::Reader,
+        operation: &RenameOperation,
     ) -> Result<()> {
-        let new_parent = params.get_new_parent().unwrap();
-        let new_name = params.get_new_name().unwrap();
-
         if deferred {
-            handler.deferred_rename(
-                id,
-                timestamp,
-                dirent_version,
-                content_version,
-                new_parent,
-                new_name,
-            )
+            handler.deferred_rename(id, timestamp, dirent_version, content_version, operation)
         } else {
-            Ok(handler.perform_rename(id, timestamp, new_parent, new_name))
+            Ok(handler.perform_rename(id, timestamp, operation))
         }
     }
 
@@ -431,44 +385,18 @@ impl OperationApplier {
         timestamp: Timespec,
         dirent_version: i64,
         content_version: i64,
-        params: ops::set_attributes::Reader,
+        operation: &SetAttributesOperation,
     ) -> Result<()> {
-        let to_save = params.get_to_save().unwrap();
-        let mode: FileMode = to_save.get_mode();
-        let uid: u32 = to_save.get_uid();
-        let gid: u32 = to_save.get_gid();
-        let size: u64 = to_save.get_size();
-        let atim: Option<Timespec> = if to_save.has_atim() {
-            Some(to_save.get_atim().unwrap().into())
-        } else {
-            None
-        };
-        let mtim: Option<Timespec> = if to_save.has_mtim() {
-            Some(to_save.get_mtim().unwrap().into())
-        } else {
-            None
-        };
-
-        let mode = Self::check_default_value(mode, Self::DEFAULT_MODE);
-        let uid = Self::check_default_value(uid, Self::DEFAULT_UID);
-        let gid = Self::check_default_value(gid, Self::DEFAULT_GID);
-        let size = Self::check_default_value(size, Self::DEFAULT_SIZE);
-
         if deferred {
             handler.deferred_set_attributes(
                 id,
                 timestamp,
                 dirent_version,
                 content_version,
-                mode,
-                uid,
-                gid,
-                size,
-                atim,
-                mtim,
+                operation,
             )
         } else {
-            Ok(handler.perform_set_attributes(id, timestamp, mode, uid, gid, size, atim, mtim))
+            Ok(handler.perform_set_attributes(id, timestamp, operation))
         }
     }
 
@@ -479,22 +407,12 @@ impl OperationApplier {
         timestamp: Timespec,
         dirent_version: i64,
         content_version: i64,
-        params: ops::write::Reader,
+        operation: &WriteOperation,
     ) -> Result<()> {
-        let offset = params.get_offset();
-        let data = params.get_data().unwrap();
-
         if deferred {
-            handler.deferred_write(
-                id,
-                timestamp,
-                dirent_version,
-                content_version,
-                offset as usize,
-                data,
-            )
+            handler.deferred_write(id, timestamp, dirent_version, content_version, operation)
         } else {
-            Ok(handler.perform_write(id, timestamp, offset as usize, data))
+            Ok(handler.perform_write(id, timestamp, operation))
         }
     }
 }
