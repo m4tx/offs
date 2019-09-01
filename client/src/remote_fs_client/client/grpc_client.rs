@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use futures::Future;
 use futures::stream::Stream;
+use futures::Future;
 use grpcio::{ChannelBuilder, EnvBuilder};
 use itertools::Itertools;
 

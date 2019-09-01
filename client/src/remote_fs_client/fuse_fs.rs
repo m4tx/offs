@@ -2,14 +2,18 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use fuse::{
-    FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen,
+    FileAttr, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen,
     ReplyWrite, Request,
 };
+use libc::{S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S_IFREG, S_IFSOCK};
 use time::Timespec;
 
-use offs::store::FileMode;
+use offs::store::{DirEntity, FileMode, FileType};
+
+use crate::remote_fs_client::error::{RemoteFsError, RemoteFsErrorKind};
 
 use super::OffsFilesystem;
+use super::Result;
 
 const TTL: time::Timespec = Timespec { sec: 1, nsec: 0 };
 
@@ -23,6 +27,68 @@ macro_rules! try_fs {
             }
         }
     };
+}
+
+impl OffsFilesystem {
+    fn check_os_str(string: &OsStr) -> Result<&str> {
+        string
+            .to_str()
+            .ok_or(RemoteFsError::new(RemoteFsErrorKind::InvalidValue))
+    }
+
+    fn get_fuse_stat(&mut self, dirent: &DirEntity) -> FileAttr {
+        let id = &dirent.id;
+        let inode = self.get_inode_for_id(id);
+
+        FileAttr {
+            ino: inode,
+            size: dirent.stat.size,
+            blocks: dirent.stat.blocks,
+            atime: dirent.stat.atim,
+            mtime: dirent.stat.mtim,
+            ctime: dirent.stat.ctim,
+            crtime: Timespec { sec: 0, nsec: 0 },
+            kind: OffsFilesystem::convert_file_type(dirent.stat.file_type),
+            perm: dirent.stat.mode,
+            nlink: dirent.stat.nlink as u32,
+            uid: dirent.stat.uid,
+            gid: dirent.stat.gid,
+            rdev: dirent.stat.dev,
+            flags: 0,
+        }
+    }
+
+    fn convert_file_type(store_file_type: FileType) -> fuse::FileType {
+        match store_file_type {
+            FileType::NamedPipe => fuse::FileType::NamedPipe,
+            FileType::CharDevice => fuse::FileType::CharDevice,
+            FileType::BlockDevice => fuse::FileType::BlockDevice,
+            FileType::Directory => fuse::FileType::Directory,
+            FileType::RegularFile => fuse::FileType::RegularFile,
+            FileType::Symlink => fuse::FileType::Symlink,
+            FileType::Socket => fuse::FileType::Socket,
+        }
+    }
+
+    fn mode_to_file_type(mode: u32) -> FileType {
+        if (mode & S_IFIFO) == S_IFIFO {
+            FileType::NamedPipe
+        } else if (mode & S_IFCHR) == S_IFCHR {
+            FileType::CharDevice
+        } else if (mode & S_IFBLK) == S_IFBLK {
+            FileType::BlockDevice
+        } else if (mode & S_IFDIR) == S_IFDIR {
+            FileType::Directory
+        } else if (mode & S_IFREG) == S_IFREG {
+            FileType::RegularFile
+        } else if (mode & S_IFLNK) == S_IFLNK {
+            FileType::Symlink
+        } else if (mode & S_IFSOCK) == S_IFSOCK {
+            FileType::Socket
+        } else {
+            unreachable!()
+        }
+    }
 }
 
 impl Filesystem for OffsFilesystem {
@@ -276,8 +342,8 @@ impl Filesystem for OffsFilesystem {
         let items = try_fs!(self.list_files(&dir_id), reply);
 
         let mut entries = vec![
-            (1, FileType::Directory, ".".to_owned()),
-            (1, FileType::Directory, "..".to_owned()),
+            (1, fuse::FileType::Directory, ".".to_owned()),
+            (1, fuse::FileType::Directory, "..".to_owned()),
         ];
         for dirent in items {
             entries.push((
