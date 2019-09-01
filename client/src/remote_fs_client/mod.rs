@@ -7,3 +7,4 @@ mod fs;
 mod fuse_fs;
 mod operation_handler;
 mod write_buffer;
+mod journal;
