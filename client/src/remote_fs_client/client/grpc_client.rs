@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use futures::stream::Stream;
 use futures::Future;
+use futures::stream::Stream;
 use grpcio::{ChannelBuilder, EnvBuilder};
 use itertools::Itertools;
-use time::Timespec;
 
 use offs::errors::JournalApplyResult;
 use offs::modify_op::ModifyOperation;
@@ -13,7 +12,7 @@ use offs::proto::filesystem::{
     ApplyJournalRequest, GetBlobsRequest, GetMissingBlobsRequest, ListChunksRequest, ListRequest,
 };
 use offs::proto::filesystem_grpc::RemoteFsClient;
-use offs::store::{DirEntity, FileStat, FileType};
+use offs::store::DirEntity;
 
 pub struct RemoteFsGrpcClient {
     client: RemoteFsClient,
@@ -34,48 +33,15 @@ impl RemoteFsGrpcClient {
         req.set_id(dir_id.to_owned());
 
         let mut resp = self.client.list(&req).unwrap();
-        let mut res = Vec::new();
+        let mut res: Vec<DirEntity> = Vec::new();
 
         loop {
             let f = resp.into_future();
             match f.wait() {
-                Ok((Some(feature), s)) => {
+                Ok((Some(dir_entity), s)) => {
                     resp = s;
 
-                    let stat = FileStat {
-                        ino: feature.get_stat().ino,
-                        file_type: FileType::RegularFile,
-                        mode: feature.get_stat().perm as u16,
-                        dev: 0,
-                        nlink: feature.get_stat().nlink,
-                        uid: feature.get_stat().uid,
-                        gid: feature.get_stat().gid,
-                        size: feature.get_stat().size,
-                        blocks: feature.get_stat().blocks,
-                        atim: Timespec::new(
-                            feature.get_stat().get_atim().sec,
-                            feature.get_stat().get_atim().nsec,
-                        ),
-                        mtim: Timespec::new(
-                            feature.get_stat().get_mtim().sec,
-                            feature.get_stat().get_mtim().nsec,
-                        ),
-                        ctim: Timespec::new(
-                            feature.get_stat().get_ctim().sec,
-                            feature.get_stat().get_ctim().nsec,
-                        ),
-                    };
-                    let dir_entity = DirEntity {
-                        id: feature.id,
-                        parent: feature.parent,
-                        name: feature.name,
-                        dirent_version: feature.dirent_version,
-                        content_version: feature.content_version,
-                        retrieved_version: feature.content_version,
-                        stat: stat,
-                    };
-
-                    res.push(dir_entity);
+                    res.push(dir_entity.into());
                 }
                 Ok((None, _)) => break,
                 Err((e, _)) => panic!("List files failed: {:?}", e),
