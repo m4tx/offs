@@ -1,15 +1,15 @@
 use std::sync::atomic::Ordering;
 
 use itertools::Itertools;
-use protobuf::{Message, parse_from_bytes};
+use protobuf::{parse_from_bytes, Message};
 
 use offs::errors::{JournalApplyData, OperationApplyError};
 use offs::modify_op::ModifyOperation;
 use offs::proto::filesystem as proto_types;
 use offs::store::id_generator::LocalTempIdGenerator;
 
-use crate::remote_fs_client::client::modify_op_builder::ModifyOpBuilder;
-use crate::remote_fs_client::OffsFilesystem;
+use super::super::client::modify_op_builder::ModifyOpBuilder;
+use super::OffsFilesystem;
 
 impl OffsFilesystem {
     fn prepare_and_send_journal(&mut self) -> JournalApplyData {

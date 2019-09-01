@@ -8,11 +8,10 @@ use offs::modify_op_handler::OperationApplier;
 use offs::proto::filesystem as proto_types;
 use offs::store::{DirEntity, FileDev, FileMode, FileType};
 
-use crate::remote_fs_client::client::modify_op_builder::ModifyOpBuilder;
-use crate::remote_fs_client::error::{RemoteFsError, RemoteFsErrorKind};
-
-use super::{OffsFilesystem, Result};
+use super::super::client::modify_op_builder::ModifyOpBuilder;
+use super::error::{RemoteFsError, RemoteFsErrorKind};
 use super::write_buffer::WriteOperation;
+use super::{OffsFilesystem, Result};
 
 impl OffsFilesystem {
     // File operations

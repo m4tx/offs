@@ -10,8 +10,7 @@ use time::Timespec;
 
 use offs::store::{DirEntity, FileMode, FileType};
 
-use crate::remote_fs_client::error::{RemoteFsError, RemoteFsErrorKind};
-
+use super::error::{RemoteFsError, RemoteFsErrorKind};
 use super::OffsFilesystem;
 use super::Result;
 
