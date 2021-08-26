@@ -4,11 +4,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use dbus::blocking::{Connection, LocalConnection};
+use dbus::blocking::Connection;
 use dbus::channel::MatchingReceiver;
 use dbus::Error;
-use dbus_crossroads::{Context, Crossroads, IfaceBuilder};
-use dbus_tree::{Access, Factory};
+use dbus_crossroads::{Crossroads, IfaceBuilder};
 
 use offs::dbus::{ID_PREFIX, IFACE, MOUNT_POINT, OFFLINE_MODE, PATH};
 
@@ -30,13 +29,13 @@ pub fn run_dbus_server(
 
     let mut cr = Crossroads::new();
 
-    let iface_token = cr.register(name, |b: &mut IfaceBuilder<InterfaceData>| {
+    let iface_token = cr.register(IFACE, |b: &mut IfaceBuilder<InterfaceData>| {
         b.property(MOUNT_POINT)
             .get(|_, data| Ok(data.mount_point.to_str().unwrap().to_owned()));
 
         b.property(OFFLINE_MODE)
             .get(|_, data| Ok(data.offline_mode.load(Ordering::Relaxed)))
-            .set(|x, data, enabled| {
+            .set(|_, data, enabled| {
                 data.offline_mode.store(enabled, Ordering::Relaxed);
                 if !enabled {
                     data.should_flush_journal.store(true, Ordering::Relaxed);
@@ -62,7 +61,7 @@ pub fn run_dbus_server(
     );
 
     while fs_mounted.load(Ordering::Relaxed) {
-        c.process(std::time::Duration::from_millis(1000))?;
+        c.process(Duration::from_millis(1000))?;
     }
 
     Ok(())
