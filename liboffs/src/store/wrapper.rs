@@ -4,8 +4,8 @@ use std::iter;
 
 use crate::store::id_generator::IdGenerator;
 use crate::store::{FileDev, FileMode, FileType, Store};
-use crate::BLOB_SIZE;
 use crate::timespec::Timespec;
+use crate::BLOB_SIZE;
 
 #[derive(Clone)]
 pub struct StoreWrapper<T: IdGenerator> {

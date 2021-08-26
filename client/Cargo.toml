@@ -24,7 +24,7 @@ libc = "0.2.101"
 
 clap = "2.33.3"
 dbus = "0.9.3"
-dbus-tree = "0.9.1"
+dbus-crossroads = "0.4.0"
 nix = "0.22.1"
 ctrlc = "3.2.0"
 itertools = "0.10.1"

@@ -4,11 +4,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use dbus::blocking::LocalConnection;
-use dbus_tree::{Access, Factory};
+use dbus::blocking::{Connection, LocalConnection};
+use dbus::channel::MatchingReceiver;
 use dbus::Error;
+use dbus_crossroads::{Context, Crossroads, IfaceBuilder};
+use dbus_tree::{Access, Factory};
 
 use offs::dbus::{ID_PREFIX, IFACE, MOUNT_POINT, OFFLINE_MODE, PATH};
+
+struct InterfaceData {
+    mount_point: PathBuf,
+    offline_mode: Arc<AtomicBool>,
+    should_flush_journal: Arc<AtomicBool>,
+}
 
 pub fn run_dbus_server(
     fs_mounted: Arc<AtomicBool>,
@@ -16,47 +24,45 @@ pub fn run_dbus_server(
     offline_mode: Arc<AtomicBool>,
     should_flush_journal: Arc<AtomicBool>,
 ) -> Result<(), Error> {
-    let c = LocalConnection::new_session()?;
+    let c = Connection::new_session()?;
     let name = format!("{}{}", ID_PREFIX, process::id());
     c.request_name(&name, false, true, false)?;
-    let f = Factory::new_fn::<()>();
 
-    let offline_mode_write = offline_mode.clone();
-    let tree = f.tree(()).add(
-        f.object_path(PATH, ()).introspectable().add(
-            f.interface(IFACE, ())
-                .add_p(
-                    f.property::<&str, _>(MOUNT_POINT, ())
-                        .access(Access::Read)
-                        .on_get(move |i, _| {
-                            i.append(mount_point.to_str().unwrap());
-                            Ok(())
-                        }),
-                )
-                .add_p(
-                    f.property::<bool, _>(OFFLINE_MODE, ())
-                        .access(Access::ReadWrite)
-                        .on_get(move |i, _| {
-                            i.append(offline_mode.load(Ordering::Relaxed));
+    let mut cr = Crossroads::new();
 
-                            Ok(())
-                        })
-                        .on_set(move |i, _| {
-                            let enabled: bool = i.read()?;
-                            offline_mode_write.store(enabled, Ordering::Relaxed);
-                            if !enabled {
-                                should_flush_journal.store(true, Ordering::Relaxed);
-                            }
+    let iface_token = cr.register(name, |b: &mut IfaceBuilder<InterfaceData>| {
+        b.property(MOUNT_POINT)
+            .get(|_, data| Ok(data.mount_point.to_str().unwrap().to_owned()));
 
-                            Ok(())
-                        }),
-                ),
-        ),
+        b.property(OFFLINE_MODE)
+            .get(|_, data| Ok(data.offline_mode.load(Ordering::Relaxed)))
+            .set(|x, data, enabled| {
+                data.offline_mode.store(enabled, Ordering::Relaxed);
+                if !enabled {
+                    data.should_flush_journal.store(true, Ordering::Relaxed);
+                }
+
+                Ok(Some(enabled))
+            });
+    });
+
+    let data = InterfaceData {
+        mount_point,
+        offline_mode,
+        should_flush_journal,
+    };
+    cr.insert(PATH, &[iface_token], data);
+
+    c.start_receive(
+        dbus::message::MatchRule::new_method_call(),
+        Box::new(move |msg, conn| {
+            cr.handle_message(msg, conn).unwrap();
+            true
+        }),
     );
 
-    tree.start_receive(&c);
     while fs_mounted.load(Ordering::Relaxed) {
-        c.process(Duration::from_millis(1000))?;
+        c.process(std::time::Duration::from_millis(1000))?;
     }
 
     Ok(())

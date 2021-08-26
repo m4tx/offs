@@ -181,10 +181,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "dbus-tree"
-version = "0.9.1"
+name = "dbus-crossroads"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b15e1727e94490a9e0c1174284ea83fe5e6db853b43cda77d99bb371008a4fd0"
+checksum = "c4581bbfd99f34e6864049adbe099e07c0d55c40760b23bb8e1e5d1c2ae68ca3"
 dependencies = [
  "dbus",
 ]
@@ -684,7 +684,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "dbus",
- "dbus-tree",
+ "dbus-crossroads",
  "fuser",
  "futures",
  "itertools",

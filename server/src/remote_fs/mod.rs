@@ -17,9 +17,9 @@ use offs::store::wrapper::StoreWrapper;
 use offs::store::{FileDev, FileMode, FileType, Store};
 
 mod grpc_server;
+use chrono::{TimeZone, Utc};
 pub use grpc_server::RemoteFsServerImpl;
 use offs::timespec::Timespec;
-use chrono::{TimeZone, Utc};
 
 macro_rules! check_content_version {
     ($id:ident, $dirent:ident, $content_version:ident) => {{

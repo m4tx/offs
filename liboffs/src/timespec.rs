@@ -1,4 +1,4 @@
-use std::time::{SystemTime, Duration};
+use std::time::{Duration, SystemTime};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Timespec {

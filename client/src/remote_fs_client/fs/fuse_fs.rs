@@ -15,8 +15,8 @@ use offs::store::{DirEntity, FileMode, FileType};
 use super::error::{RemoteFsError, RemoteFsErrorKind};
 use super::OffsFilesystem;
 use super::Result;
-use std::time::{Duration, SystemTime};
 use offs::timespec::Timespec;
+use std::time::{Duration, SystemTime};
 
 const TTL: Duration = Duration::from_secs(1);
 
