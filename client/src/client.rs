@@ -1,24 +1,20 @@
-use std::ffi::{CString, OsStr};
 use std::net::SocketAddr;
-use std::os::raw::c_char;
-use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
-use nix::mount::umount;
+use tokio::sync::RwLock;
 
 use offs::store::id_generator::LocalTempIdGenerator;
 use offs::store::Store;
 
-use crate::remote_fs_client::OffsFilesystem;
+use crate::remote_fs_client::{FuseOffsFilesystem, OffsFilesystem};
 
 use super::dbus_server;
 
 pub fn run_client(
     mount_point: &Path,
-    fuse_options: Vec<&OsStr>,
     address: SocketAddr,
     offline_mode: bool,
     store: Store<LocalTempIdGenerator>,
@@ -44,35 +40,44 @@ pub fn run_client(
         });
     }
 
-    set_sigterm_handler(mount_point);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
 
-    fuse::mount(
-        OffsFilesystem::new(address, offline_mode_val, should_flush_journal, store),
+    let fs = rt.block_on(async move {
+        OffsFilesystem::new(address, offline_mode_val, should_flush_journal, store)
+            .await
+            .unwrap()
+    });
+    let fs = Arc::new(RwLock::new(fs));
+
+    let thread_lock = Arc::new((Mutex::new(false), Condvar::new()));
+    set_sigterm_handler(thread_lock.clone());
+
+    let session = fuser::Session::new(
+        FuseOffsFilesystem::new(fs, rt),
         &mount_point,
-        &fuse_options,
+        Default::default(),
     )
     .unwrap();
+    let _background_session = session.spawn().unwrap();
+
+    let (lock, cvar) = &*thread_lock;
+    let mut interrupted = lock.lock().unwrap();
+    while !*interrupted {
+        interrupted = cvar.wait(interrupted).unwrap();
+    }
 
     fs_mounted.store(false, Ordering::Relaxed);
 }
 
-fn set_sigterm_handler(mount_point: &Path) {
-    let mount_point_cloned = mount_point.to_owned();
+fn set_sigterm_handler(pair2: Arc<(Mutex<bool>, Condvar)>) {
     ctrlc::set_handler(move || {
-        unmount_fs(&mount_point_cloned);
+        let (lock, cvar) = &*pair2;
+        let mut interrupted = lock.lock().unwrap();
+        *interrupted = true;
+        cvar.notify_one();
     })
     .expect("Error setting SIGTERM handler");
-}
-
-extern "C" {
-    pub fn fuse_unmount_compat22(mountpoint: *const c_char);
-}
-
-fn unmount_fs(mount_point: &Path) {
-    if let Err(_) = umount(mount_point) {
-        let mnt = CString::new(mount_point.as_os_str().as_bytes()).unwrap();
-        unsafe {
-            fuse_unmount_compat22(mnt.as_ptr());
-        }
-    }
 }

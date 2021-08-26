@@ -1,140 +1,170 @@
-use futures::sink::Sink;
-use futures::stream;
-use futures::Future;
-use grpcio::{Error, RpcContext, ServerStreamingSink, UnarySink, WriteFlags};
+use std::ops::DerefMut;
+
 use itertools::Itertools;
+use tokio::sync::{mpsc, RwLock};
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::{Request, Response, Status};
 
 use offs::modify_op;
 use offs::modify_op_handler::OperationApplier;
+use offs::proto::filesystem::remote_fs_server::RemoteFs;
 use offs::proto::filesystem::{
     ApplyJournalRequest, ApplyJournalResponse, Blob, DirEntity, GetBlobsRequest,
     GetMissingBlobsRequest, GetMissingBlobsResult, ListChunksRequest, ListChunksResult,
     ListRequest, ModifyOperation,
 };
-use offs::proto::filesystem_grpc::RemoteFs;
 
-impl RemoteFs for super::RemoteFs {
-    fn list(&mut self, ctx: RpcContext, req: ListRequest, sink: ServerStreamingSink<DirEntity>) {
+pub struct RemoteFsServerImpl {
+    fs: RwLock<super::RemoteFs>,
+}
+
+impl RemoteFsServerImpl {
+    pub fn new(fs: super::RemoteFs) -> Self {
+        Self {
+            fs: RwLock::new(fs),
+        }
+    }
+}
+
+#[tonic::async_trait]
+impl RemoteFs for RemoteFsServerImpl {
+    type ListStream = ReceiverStream<Result<DirEntity, Status>>;
+
+    async fn list(
+        &self,
+        request: Request<ListRequest>,
+    ) -> Result<Response<Self::ListStream>, Status> {
+        let (tx, rx) = mpsc::channel(4);
         let files = self
+            .fs
+            .read()
+            .await
             .store
             .inner
-            .list_files(&req.id)
+            .list_files(&request.into_inner().id)
             .into_iter()
-            .map(|x| (DirEntity::from(x), WriteFlags::default()));
+            .map(|x| DirEntity::from(x));
 
-        let f = sink
-            .send_all(stream::iter_ok::<_, Error>(files))
-            .map(|_| {})
-            .map_err(|e| println!("failed to handle List request: {:?}", e));
-        ctx.spawn(f)
+        tokio::spawn(async move {
+            for file in files {
+                tx.send(Ok(file)).await.unwrap();
+            }
+        });
+
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 
-    fn list_chunks(
-        &mut self,
-        ctx: RpcContext,
-        req: ListChunksRequest,
-        sink: UnarySink<ListChunksResult>,
-    ) {
-        let chunks = self.store.inner.get_chunks(&req.id);
+    async fn list_chunks(
+        &self,
+        request: Request<ListChunksRequest>,
+    ) -> Result<Response<ListChunksResult>, Status> {
+        let chunks = self
+            .fs
+            .read()
+            .await
+            .store
+            .inner
+            .get_chunks(&request.into_inner().id);
 
-        let mut resp = ListChunksResult::default();
-        resp.set_blob_id(chunks.into());
+        let resp = ListChunksResult {
+            blob_id: chunks.into(),
+        };
 
-        let f = sink
-            .success(resp)
-            .map_err(|e| println!("failed to handle ListChunks request: {:?}", e));
-        ctx.spawn(f)
+        Ok(Response::new(resp))
     }
 
-    fn get_blobs(
-        &mut self,
-        ctx: RpcContext,
-        req: GetBlobsRequest,
-        sink: ServerStreamingSink<Blob>,
-    ) {
+    type GetBlobsStream = ReceiverStream<Result<Blob, Status>>;
+
+    async fn get_blobs(
+        &self,
+        request: Request<GetBlobsRequest>,
+    ) -> Result<Response<Self::GetBlobsStream>, Status> {
+        let (tx, rx) = mpsc::channel(4);
         let blobs = self
+            .fs
+            .read()
+            .await
             .store
             .inner
-            .get_blobs(req.id.into_vec())
+            .get_blobs(request.into_inner().id)
             .into_iter()
-            .map(|(k, v)| {
-                let mut blob = Blob::default();
+            .map(|(k, v)| Blob { id: k, content: v });
 
-                blob.set_id(k);
-                blob.set_content(v);
+        tokio::spawn(async move {
+            for blob in blobs {
+                tx.send(Ok(blob)).await.unwrap();
+            }
+        });
 
-                (blob, WriteFlags::default())
-            });
-
-        let f = sink
-            .send_all(stream::iter_ok::<_, Error>(blobs))
-            .map(|_| {})
-            .map_err(|e| println!("failed to handle GetBlobs request: {:?}", e));
-        ctx.spawn(f)
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 
-    fn apply_operation(
-        &mut self,
-        ctx: RpcContext,
-        req: ModifyOperation,
-        sink: UnarySink<DirEntity>,
-    ) {
-        let transaction = self.store.inner.transaction();
+    async fn apply_operation(
+        &self,
+        request: Request<ModifyOperation>,
+    ) -> Result<Response<DirEntity>, Status> {
+        let dir_entity = {
+            let mut fs = self.fs.write().await;
+            let transaction = fs.store.inner.transaction();
 
-        let new_id = OperationApplier::apply_operation(self, &req.into())
-            .ok()
-            .unwrap();
+            let new_id =
+                OperationApplier::apply_operation(fs.deref_mut(), &request.into_inner().into())
+                    .ok()
+                    .unwrap();
 
-        let dir_entity = self.store.inner.query_file(&new_id).unwrap();
+            let dir_entity = fs.store.inner.query_file(&new_id).unwrap();
 
-        transaction.commit().unwrap();
+            transaction.commit().unwrap();
 
-        let f = sink
-            .success(dir_entity.into())
-            .map_err(|e| println!("failed to handle ApplyOperation request: {:?}", e));
-        ctx.spawn(f)
+            dir_entity
+        };
+
+        Ok(Response::new(dir_entity.into()))
     }
 
-    fn apply_journal(
-        &mut self,
-        ctx: RpcContext,
-        req: ApplyJournalRequest,
-        sink: UnarySink<ApplyJournalResponse>,
-    ) {
+    async fn apply_journal(
+        &self,
+        request: Request<ApplyJournalRequest>,
+    ) -> Result<Response<ApplyJournalResponse>, Status> {
+        let req = request.into_inner();
         let converted_operations: Vec<modify_op::ModifyOperation> =
             req.operations.into_iter().map(|x| x.into()).collect_vec();
         let converted_chunks: Vec<Vec<String>> =
             req.chunks.into_iter().map(|x| x.into()).collect_vec();
         let converted_blobs: Vec<Vec<u8>> = req.blobs.into();
 
-        let transaction = self.store.inner.transaction();
+        let result = {
+            let mut fs = self.fs.write().await;
+            let transaction = fs.store.inner.transaction();
 
-        let result =
-            self.apply_full_journal(converted_operations, converted_chunks, converted_blobs);
-        if result.is_ok() {
-            transaction.commit().unwrap();
-        }
+            let result =
+                fs.apply_full_journal(converted_operations, converted_chunks, converted_blobs);
+            if result.is_ok() {
+                transaction.commit().unwrap();
+            }
 
-        let f = sink
-            .success(result.into())
-            .map_err(|e| println!("failed to handle ApplyJournal request: {:?}", e));
-        ctx.spawn(f)
+            result
+        };
+
+        Ok(Response::new(result.into()))
     }
 
-    fn get_missing_blobs(
-        &mut self,
-        ctx: RpcContext,
-        req: GetMissingBlobsRequest,
-        sink: UnarySink<GetMissingBlobsResult>,
-    ) {
-        let chunks = self.store.inner.get_missing_blobs(req.id.into_vec());
+    async fn get_missing_blobs(
+        &self,
+        request: Request<GetMissingBlobsRequest>,
+    ) -> Result<Response<GetMissingBlobsResult>, Status> {
+        let chunks = self
+            .fs
+            .read()
+            .await
+            .store
+            .inner
+            .get_missing_blobs(request.into_inner().id);
 
-        let mut resp = GetMissingBlobsResult::default();
-        resp.set_blob_id(chunks.into());
+        let resp = GetMissingBlobsResult {
+            blob_id: chunks.into(),
+        };
 
-        let f = sink
-            .success(resp)
-            .map_err(|e| println!("failed to handle GetMissingBlobs request: {:?}", e));
-        ctx.spawn(f)
+        Ok(Response::new(resp))
     }
 }

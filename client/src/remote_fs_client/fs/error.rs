@@ -33,3 +33,15 @@ impl From<rusqlite::Error> for RemoteFsError {
         Self::new(RemoteFsErrorKind::TransactionFailure)
     }
 }
+
+impl From<tonic::Status> for RemoteFsError {
+    fn from(_: tonic::Status) -> Self {
+        Self::new(RemoteFsErrorKind::Offline)
+    }
+}
+
+impl From<tonic::transport::Error> for RemoteFsError {
+    fn from(_: tonic::transport::Error) -> Self {
+        Self::new(RemoteFsErrorKind::Offline)
+    }
+}

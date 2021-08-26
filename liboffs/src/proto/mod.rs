@@ -1,3 +1,5 @@
-pub mod filesystem;
-pub mod filesystem_grpc;
 pub mod converters;
+
+pub mod filesystem {
+    tonic::include_proto!("filesystem");
+}

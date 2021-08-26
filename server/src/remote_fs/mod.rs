@@ -2,7 +2,6 @@ use std::path::Path;
 use std::result;
 
 use itertools::Itertools;
-use time::Timespec;
 
 use offs::errors::{JournalApplyData, JournalApplyResult, OperationApplyError};
 
@@ -18,6 +17,9 @@ use offs::store::wrapper::StoreWrapper;
 use offs::store::{FileDev, FileMode, FileType, Store};
 
 mod grpc_server;
+pub use grpc_server::RemoteFsServerImpl;
+use offs::timespec::Timespec;
+use chrono::{TimeZone, Utc};
 
 macro_rules! check_content_version {
     ($id:ident, $dirent:ident, $content_version:ident) => {{
@@ -127,8 +129,8 @@ impl RemoteFs {
             .extension()
             .map_or("".to_owned(), |x| format!(".{}", x.to_str().unwrap()));
 
-        let tm = time::at(timestamp);
-        let date_str = tm.strftime("%Y-%m-%d").unwrap().to_string();
+        let datetime = Utc.timestamp(timestamp.sec, timestamp.nsec);
+        let date_str = datetime.format("%Y-%m-%d").to_string();
 
         let new_name = format!("{} (Conflicted copy {}){}", name, date_str, ext);
         if !self.store.inner.file_exists_by_name(parent_id, &new_name) {
@@ -136,7 +138,7 @@ impl RemoteFs {
         }
 
         // Windows does not support colons in filenames, so we have to work around that
-        let time_str = tm.strftime("%H-%M-%S").unwrap().to_string();
+        let time_str = datetime.format("%H-%M-%S").to_string();
         let new_name = format!(
             "{} (Conflicted copy {} {}){}",
             name, date_str, time_str, ext

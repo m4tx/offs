@@ -1,5 +1,5 @@
 use crate::store::{FileDev, FileMode, FileType};
-use time::Timespec;
+use crate::timespec::Timespec;
 
 #[derive(Clone)]
 pub struct CreateFileOperation {

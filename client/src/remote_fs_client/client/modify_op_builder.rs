@@ -1,5 +1,3 @@
-use time::Timespec;
-
 use offs::modify_op::{
     CreateDirectoryOperation, CreateFileOperation, CreateSymlinkOperation, ModifyOperation,
     ModifyOperationContent, RemoveDirectoryOperation, RemoveFileOperation, RenameOperation,
@@ -7,6 +5,7 @@ use offs::modify_op::{
 };
 use offs::now;
 use offs::store::{DirEntity, FileDev, FileMode, FileType};
+use offs::timespec::Timespec;
 
 pub struct ModifyOpBuilder;
 

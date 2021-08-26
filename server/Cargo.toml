@@ -16,10 +16,12 @@ travis-ci = { repository = "m4tx/offs", branch = "master" }
 [dependencies]
 offs = { path = "../liboffs" }
 
-futures = "0.1.28"
-grpcio = "0.4.4"
+tonic = "0.5.2"
+prost = "0.8.0"
+tokio = { version = "1.10.1", features = ["macros", "rt-multi-thread"] }
+tokio-stream = { version = "0.1.7", features = ["net"] }
 
-time = "0.1.42"
+chrono = "0.4.19"
 
-itertools = "0.8.0"
-clap = "2.33.0"
+itertools = "0.10.1"
+clap = "2.33.3"

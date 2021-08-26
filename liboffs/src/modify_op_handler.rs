@@ -1,12 +1,11 @@
 use std::result;
 
-use time::Timespec;
-
 use crate::modify_op::{
     CreateDirectoryOperation, CreateFileOperation, CreateSymlinkOperation, ModifyOperation,
     ModifyOperationContent, RemoveDirectoryOperation, RemoveFileOperation, RenameOperation,
     SetAttributesOperation, WriteOperation,
 };
+use crate::timespec::Timespec;
 
 pub enum OperationError {
     InvalidOperation,

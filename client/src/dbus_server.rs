@@ -2,9 +2,11 @@ use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
-use dbus::tree::{Access, Factory};
-use dbus::{BusType, Connection, Error, NameFlag};
+use dbus::blocking::LocalConnection;
+use dbus_tree::{Access, Factory};
+use dbus::Error;
 
 use offs::dbus::{ID_PREFIX, IFACE, MOUNT_POINT, OFFLINE_MODE, PATH};
 
@@ -14,9 +16,9 @@ pub fn run_dbus_server(
     offline_mode: Arc<AtomicBool>,
     should_flush_journal: Arc<AtomicBool>,
 ) -> Result<(), Error> {
-    let c = Connection::get_private(BusType::Session)?;
+    let c = LocalConnection::new_session()?;
     let name = format!("{}{}", ID_PREFIX, process::id());
-    c.register_name(&name, NameFlag::ReplaceExisting as u32)?;
+    c.request_name(&name, false, true, false)?;
     let f = Factory::new_fn::<()>();
 
     let offline_mode_write = offline_mode.clone();
@@ -52,11 +54,9 @@ pub fn run_dbus_server(
         ),
     );
 
-    tree.set_registered(&c, true)?;
-    c.add_handler(tree);
-
+    tree.start_receive(&c);
     while fs_mounted.load(Ordering::Relaxed) {
-        c.incoming(1000).next();
+        c.process(Duration::from_millis(1000))?;
     }
 
     Ok(())

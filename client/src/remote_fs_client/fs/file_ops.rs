@@ -1,7 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use protobuf::Message;
-use time::Timespec;
+use prost::Message;
 
 use offs::modify_op::ModifyOperation;
 use offs::modify_op_handler::OperationApplier;
@@ -12,29 +11,30 @@ use super::super::client::modify_op_builder::ModifyOpBuilder;
 use super::error::{RemoteFsError, RemoteFsErrorKind};
 use super::write_buffer::WriteOperation;
 use super::{OffsFilesystem, Result};
+use offs::timespec::Timespec;
 
 impl OffsFilesystem {
     // File operations
-    pub(super) fn flush_write_buffer(&mut self) -> Result<()> {
+    pub(super) async fn flush_write_buffer(&mut self) -> Result<()> {
         for op in self.write_buffer.flush().into_iter() {
-            self.do_single_write(op)?;
+            self.do_single_write(op).await?;
         }
 
         Ok(())
     }
 
-    fn do_single_write(&mut self, op: WriteOperation) -> Result<()> {
+    async fn do_single_write(&mut self, op: WriteOperation) -> Result<()> {
         let dirent = self.query_file(&op.id)?;
         let operation = ModifyOpBuilder::make_write_op(&dirent, op.offset as i64, op.data);
 
-        let mut dirent = self.perform_operation(operation)?;
+        let mut dirent = self.perform_operation(operation).await?;
         self.add_dirent(&mut dirent);
 
         Ok(())
     }
 
     // Read
-    pub(super) fn list_files(&mut self, id: &str) -> Result<Vec<DirEntity>> {
+    pub(super) async fn list_files(&mut self, id: &str) -> Result<Vec<DirEntity>> {
         if self.is_offline() {
             let dirent = self.query_file(id)?;
             if !dirent.is_retrieved() {
@@ -44,7 +44,7 @@ impl OffsFilesystem {
             return Ok(self.store.inner.list_files(id));
         }
 
-        let mut items = self.client.list_files(id);
+        let mut items = self.client.list_files(id).await?;
 
         let transaction = self.store.inner.transaction();
         for dirent in &mut items {
@@ -60,9 +60,9 @@ impl OffsFilesystem {
         Ok(items)
     }
 
-    pub(super) fn read(&mut self, id: &str, offset: i64, size: u32) -> Result<Vec<u8>> {
+    pub(super) async fn read(&mut self, id: &str, offset: i64, size: u32) -> Result<Vec<u8>> {
         let missing_blobs = self.store.get_missing_blobs_for_read(id, offset, size);
-        self.retrieve_missing_blobs(missing_blobs)?;
+        self.retrieve_missing_blobs(missing_blobs).await?;
 
         Ok(self.store.read(id, offset, size))
     }
@@ -75,16 +75,13 @@ impl OffsFilesystem {
             .unwrap()
     }
 
-    fn perform_operation(&mut self, operation: ModifyOperation) -> Result<DirEntity> {
+    async fn perform_operation(&mut self, operation: ModifyOperation) -> Result<DirEntity> {
         if self.should_flush_journal.load(Ordering::Relaxed) {
-            self.apply_journal();
+            self.apply_journal().await?;
         }
 
         let id = operation.id.clone();
-
-        let op_proto: proto_types::ModifyOperation = operation.into();
-        let serialized_op = op_proto.write_to_bytes().unwrap();
-        let operation: ModifyOperation = op_proto.into();
+        let serialized_op = proto_types::ModifyOperation::from(operation.clone()).encode_to_vec();
 
         let transaction = self.store.inner.transaction();
 
@@ -94,7 +91,7 @@ impl OffsFilesystem {
         let dirent = if self.is_offline() {
             self.query_file(&new_id)?
         } else {
-            let mut dirent = self.client.request_apply_operation(operation);
+            let mut dirent = self.client.request_apply_operation(operation).await?;
             self.store.inner.remove_journal_item(journal_entry_id);
 
             if !dirent.id.is_empty() {
@@ -113,7 +110,7 @@ impl OffsFilesystem {
     }
 
     // Create
-    pub(super) fn create_file(
+    pub(super) async fn create_file(
         &mut self,
         parent_id: &str,
         name: &str,
@@ -125,13 +122,13 @@ impl OffsFilesystem {
         let operation =
             ModifyOpBuilder::make_create_file_op(&parent_dirent, name, file_type, mode, dev);
 
-        let mut dirent = self.perform_operation(operation)?;
+        let mut dirent = self.perform_operation(operation).await?;
         self.add_dirent(&mut dirent);
 
         Ok(dirent)
     }
 
-    pub(super) fn create_symlink(
+    pub(super) async fn create_symlink(
         &mut self,
         parent_id: &str,
         name: &str,
@@ -140,13 +137,13 @@ impl OffsFilesystem {
         let parent_dirent = self.query_file(parent_id)?;
         let operation = ModifyOpBuilder::make_create_symlink_op(&parent_dirent, name, link);
 
-        let mut dirent = self.perform_operation(operation)?;
+        let mut dirent = self.perform_operation(operation).await?;
         self.add_dirent(&mut dirent);
 
         Ok(dirent)
     }
 
-    pub(super) fn create_directory(
+    pub(super) async fn create_directory(
         &mut self,
         parent_id: &str,
         name: &str,
@@ -155,33 +152,33 @@ impl OffsFilesystem {
         let parent_dirent = self.query_file(parent_id)?;
         let operation = ModifyOpBuilder::make_create_directory_op(&parent_dirent, name, mode);
 
-        let mut dirent = self.perform_operation(operation)?;
+        let mut dirent = self.perform_operation(operation).await?;
         self.add_dirent(&mut dirent);
 
         Ok(dirent)
     }
 
     // Remove
-    pub(super) fn remove_file(&mut self, id: &str) -> Result<()> {
+    pub(super) async fn remove_file(&mut self, id: &str) -> Result<()> {
         let dirent = self.query_file(id)?;
         let operation = ModifyOpBuilder::make_remove_file_op(&dirent);
 
-        self.perform_operation(operation)?;
+        self.perform_operation(operation).await?;
 
         Ok(())
     }
 
-    pub(super) fn remove_directory(&mut self, id: &str) -> Result<()> {
+    pub(super) async fn remove_directory(&mut self, id: &str) -> Result<()> {
         let dirent = self.query_file(id)?;
         let operation = ModifyOpBuilder::make_remove_directory_op(&dirent);
 
-        self.perform_operation(operation)?;
+        self.perform_operation(operation).await?;
 
         Ok(())
     }
 
     // Modify
-    pub(super) fn rename_file(
+    pub(super) async fn rename_file(
         &mut self,
         id: &str,
         new_parent: &str,
@@ -190,13 +187,13 @@ impl OffsFilesystem {
         let dirent = self.query_file(id)?;
         let operation = ModifyOpBuilder::make_rename_op(&dirent, new_parent, new_name);
 
-        let mut dirent = self.perform_operation(operation)?;
+        let mut dirent = self.perform_operation(operation).await?;
         self.add_dirent(&mut dirent);
 
         Ok(dirent)
     }
 
-    pub(super) fn set_attributes(
+    pub(super) async fn set_attributes(
         &mut self,
         id: &str,
         mode: Option<FileMode>,
@@ -210,13 +207,13 @@ impl OffsFilesystem {
         let operation =
             ModifyOpBuilder::make_set_attributes_op(&dirent, mode, uid, gid, size, atime, mtime);
 
-        let mut dirent = self.perform_operation(operation)?;
+        let mut dirent = self.perform_operation(operation).await?;
         self.add_dirent(&mut dirent);
 
         Ok(dirent)
     }
 
-    pub(super) fn write(&mut self, id: &str, offset: i64, data: &[u8]) -> Result<()> {
+    pub(super) async fn write(&mut self, id: &str, offset: i64, data: &[u8]) -> Result<()> {
         self.write_buffer.add_write_op(WriteOperation::new(
             id.to_owned(),
             offset as usize,
@@ -224,7 +221,7 @@ impl OffsFilesystem {
         ));
 
         if self.write_buffer.is_full() {
-            self.flush_write_buffer()?;
+            self.flush_write_buffer().await?;
         }
 
         Ok(())

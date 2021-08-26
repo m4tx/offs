@@ -1,11 +1,9 @@
-use std::ffi::OsStr;
 use std::net::ToSocketAddrs;
 use std::path::Path;
 
 use clap::{App, Arg};
 use nix::unistd::{fork, ForkResult};
 
-use itertools::Itertools;
 use offs::store::Store;
 
 mod client;
@@ -38,13 +36,6 @@ fn main() {
                 .help("Operate in foreground"),
         )
         .arg(
-            Arg::with_name("option")
-                .short("o")
-                .multiple(true)
-                .takes_value(true)
-                .help("Pass FUSE option"),
-        )
-        .arg(
             Arg::with_name("ADDRESS")
                 .help("The address of the server to connect to")
                 .validator(offs::validators::check_address)
@@ -69,22 +60,15 @@ fn main() {
 
     let mount_point = Path::new(matches.value_of("MOUNT_POINT").unwrap());
 
-    let options: Vec<&OsStr> = match matches.values_of("option") {
-        Some(values) => std::iter::repeat("-o")
-            .take(values.len())
-            .interleave(values.into_iter())
-            .map(|x| OsStr::new(x))
-            .collect(),
-        None => Vec::new(),
-    };
-
-    if !matches.is_present("foreground") {
-        match fork() {
-            Ok(ForkResult::Parent { .. }) => return,
-            Ok(ForkResult::Child) => {}
-            Err(_) => panic!("Fork failed"),
+    unsafe {
+        if !matches.is_present("foreground") {
+            match fork() {
+                Ok(ForkResult::Parent { .. }) => return,
+                Ok(ForkResult::Child) => {}
+                Err(_) => panic!("Fork failed"),
+            }
         }
     }
 
-    client::run_client(mount_point, options, address, offline, store);
+    client::run_client(mount_point, address, offline, store);
 }

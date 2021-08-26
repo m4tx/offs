@@ -1,8 +1,10 @@
 use std::fmt::{Debug, Error, Formatter};
+use std::time::Duration;
 
-use dbus::arg::Array;
-use dbus::stdintf::org_freedesktop_dbus::Properties;
-use dbus::{BusType, Connection, Message};
+use dbus::arg::{Array, Variant};
+use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
+use dbus::blocking::{BlockingSender, Connection};
+use dbus::Message;
 
 use offs::dbus::{ID_PREFIX, IFACE, MOUNT_POINT, OFFLINE_MODE, PATH};
 use offs::PROJ_NAME;
@@ -63,7 +65,7 @@ impl From<String> for DBusClientError {
 }
 
 pub fn get_connection() -> DBusClientResult<Connection> {
-    Ok(Connection::get_private(BusType::Session)?)
+    Ok(Connection::new_session()?)
 }
 
 fn get_services(connection: &Connection) -> Result<Vec<String>, DBusClientError> {
@@ -73,7 +75,7 @@ fn get_services(connection: &Connection) -> Result<Vec<String>, DBusClientError>
         "org.freedesktop.DBus",
         "ListNames",
     )?;
-    let r = connection.send_with_reply_and_block(m, 2000)?;
+    let r = connection.send_with_reply_and_block(m, Duration::from_millis(1000))?;
     let arr: Array<&str, _> = r.get1().ok_or(DBusClientError::none_error())?;
 
     Ok(arr
@@ -96,7 +98,7 @@ fn get_mount_points(
 }
 
 fn get_mount_point(connection: &Connection, service_id: &str) -> Result<String, DBusClientError> {
-    let p = connection.with_path(service_id, PATH, 2000);
+    let p = connection.with_proxy(service_id, PATH, Duration::from_millis(1000));
     Ok(p.get(IFACE, MOUNT_POINT)?)
 }
 
@@ -150,8 +152,8 @@ pub fn set_offline_mode(
     service_id: &str,
     enabled: bool,
 ) -> Result<(), DBusClientError> {
-    let p = connection.with_path(service_id, PATH, 2000);
-    p.set(IFACE, OFFLINE_MODE, enabled)?;
+    let p = connection.with_proxy(service_id, PATH, Duration::from_millis(2000));
+    p.set(IFACE, OFFLINE_MODE, Variant(enabled))?;
 
     Ok(())
 }

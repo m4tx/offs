@@ -1,5 +1,5 @@
 use num_derive::{FromPrimitive, ToPrimitive};
-use time::Timespec;
+use crate::timespec::Timespec;
 
 pub type FileMode = u16;
 pub type FileDev = u32;

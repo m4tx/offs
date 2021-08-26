@@ -5,15 +5,15 @@ use std::sync::{Arc, Mutex};
 
 use digest::Digest;
 use rusqlite::types::Null;
-use rusqlite::{params, Connection, Row, ToSql, NO_PARAMS};
+use rusqlite::{params, params_from_iter, Connection, Row, ToSql};
 use sha2::Sha256;
-use time::Timespec;
 
 use crate::store::id_generator::{LocalTempIdGenerator, RandomHexIdGenerator};
 use crate::{ROOT_ID, SQLITE_CACHE_SIZE, SQLITE_PAGE_SIZE};
 
 use self::id_generator::IdGenerator;
 pub use self::types::{DirEntity, FileDev, FileMode, FileStat, FileType};
+use crate::timespec::Timespec;
 
 pub mod id_generator;
 mod types;
@@ -87,7 +87,7 @@ impl Store<LocalTempIdGenerator> {
         let mut stmt = connection
             .prepare("SELECT id FROM file WHERE id LIKE 'temp-%' ORDER BY id DESC LIMIT 1")
             .unwrap();
-        let mut rows = stmt.query(NO_PARAMS).unwrap();
+        let mut rows = stmt.query([]).unwrap();
 
         if let Some(row) = rows.next().unwrap() {
             LocalTempIdGenerator::get_n(&row.get::<_, String>(0).unwrap()) + 1
@@ -108,7 +108,7 @@ impl Store<LocalTempIdGenerator> {
             )
             .unwrap();
 
-        let iter = stmt.query_map(NO_PARAMS, |row| Ok(row.get(0)?)).unwrap();
+        let iter = stmt.query_map([], |row| Ok(row.get(0)?)).unwrap();
 
         iter.map(|x| x.unwrap()).collect()
     }
@@ -131,9 +131,7 @@ impl Store<LocalTempIdGenerator> {
     pub fn get_journal(&self) -> Vec<Vec<u8>> {
         let connection = self.connection.lock().unwrap();
         let mut stmt = connection.prepare("SELECT operation FROM journal").unwrap();
-        let iter = stmt
-            .query_map(NO_PARAMS, |row| Ok(row.get(0).unwrap()))
-            .unwrap();
+        let iter = stmt.query_map([], |row| Ok(row.get(0).unwrap())).unwrap();
 
         iter.map(|x| x.unwrap()).collect()
     }
@@ -142,7 +140,7 @@ impl Store<LocalTempIdGenerator> {
         self.connection
             .lock()
             .unwrap()
-            .execute("DELETE FROM journal", NO_PARAMS)
+            .execute("DELETE FROM journal", [])
             .unwrap();
         self.id_generator.reset_generator();
     }
@@ -203,7 +201,7 @@ impl Store<LocalTempIdGenerator> {
         let params =
             std::iter::once(parent_id.to_owned()).chain(iter.map(|x| x.as_ref().to_owned()));
 
-        stmt.execute(params).unwrap();
+        stmt.execute(params_from_iter(params)).unwrap();
     }
 }
 
@@ -561,7 +559,8 @@ impl<IdT: IdGenerator> Store<IdT> {
         let query = "SELECT * FROM blob WHERE id IN (".to_owned() + &args_str + ")";
         let connection = self.connection.lock().unwrap();
         let mut stmt = connection.prepare(&query).unwrap();
-        let mut rows = stmt.query(iter.map(|x| x.as_ref().to_owned())).unwrap();
+        let params = iter.map(|x| x.as_ref().to_owned());
+        let mut rows = stmt.query(params_from_iter(params)).unwrap();
 
         while let Some(row) = rows.next().unwrap() {
             map.insert(row.get(0).unwrap(), row.get(1).unwrap());
@@ -599,10 +598,9 @@ impl<IdT: IdGenerator> Store<IdT> {
         let connection = self.connection.lock().unwrap();
         let mut stmt = connection.prepare(&query).unwrap();
 
+        let params = ids_iter.map(|x| x.as_ref().to_owned());
         let rows = stmt
-            .query_map(ids_iter.map(|x| x.as_ref().to_owned()), |row| {
-                Ok(row.get(0)?)
-            })
+            .query_map(params_from_iter(params), |row| Ok(row.get(0)?))
             .unwrap();
 
         rows.map(|x| x.unwrap()).collect()
@@ -610,8 +608,8 @@ impl<IdT: IdGenerator> Store<IdT> {
 
     fn get_blob_id(data: &[u8]) -> String {
         let mut hasher = Sha256::new();
-        hasher.input(data);
-        hex::encode(hasher.result())
+        hasher.update(data);
+        hex::encode(hasher.finalize())
     }
 
     pub fn add_blob(&self, data: &[u8]) -> String {
@@ -689,7 +687,7 @@ impl<IdT: IdGenerator> Store<IdT> {
         ctim: Option<Timespec>,
     ) {
         let mut columns = Vec::new();
-        let mut values: Vec<&ToSql> = Vec::new();
+        let mut values: Vec<&dyn ToSql> = Vec::new();
 
         let mode_val = mode.unwrap_or(Default::default());
         if mode.is_some() {
@@ -739,7 +737,7 @@ impl<IdT: IdGenerator> Store<IdT> {
         self.connection
             .lock()
             .unwrap()
-            .execute(&query, &values)
+            .execute(&query, params_from_iter(values))
             .unwrap();
     }
 
@@ -784,7 +782,7 @@ impl<IdT: IdGenerator> Store<IdT> {
                              LEFT JOIN chunk ON blob.id = chunk.blob
                     WHERE chunk.blob IS NULL
                 )"#,
-                NO_PARAMS,
+                [],
             )
             .unwrap();
     }
@@ -811,7 +809,7 @@ impl Transaction {
         connection
             .lock()
             .unwrap()
-            .execute("BEGIN", NO_PARAMS)
+            .execute("BEGIN", [])
             .expect("Cannot start transaction");
 
         Self {
@@ -822,7 +820,7 @@ impl Transaction {
 
     pub fn commit(mut self) -> Result<usize, rusqlite::Error> {
         self.committed = true;
-        self.connection.lock().unwrap().execute("COMMIT", NO_PARAMS)
+        self.connection.lock().unwrap().execute("COMMIT", [])
     }
 }
 
@@ -832,7 +830,7 @@ impl Drop for Transaction {
             self.connection
                 .lock()
                 .unwrap()
-                .execute("ROLLBACK", NO_PARAMS)
+                .execute("ROLLBACK", [])
                 .expect("Could not rollback transaction");
         }
     }

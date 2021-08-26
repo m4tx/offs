@@ -2,11 +2,10 @@ use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::iter;
 
-use time::Timespec;
-
 use crate::store::id_generator::IdGenerator;
 use crate::store::{FileDev, FileMode, FileType, Store};
 use crate::BLOB_SIZE;
+use crate::timespec::Timespec;
 
 #[derive(Clone)]
 pub struct StoreWrapper<T: IdGenerator> {

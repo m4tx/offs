@@ -7,7 +7,8 @@ use offs::store::Store;
 mod remote_fs;
 mod server;
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = App::new("offs server")
         .version("0.1")
         .author("Mateusz Maćkowski <m4tx@m4tx.pl>")
@@ -34,5 +35,7 @@ fn main() {
     let address_str = matches.value_of("ADDRESS").unwrap();
     let address = address_str.to_socket_addrs().unwrap().next().unwrap();
 
-    server::run_server(store, address);
+    server::run_server(store, address).await?;
+
+    Ok(())
 }

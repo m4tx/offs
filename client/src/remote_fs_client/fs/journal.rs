@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use itertools::Itertools;
-use protobuf::{parse_from_bytes, Message};
+use prost::Message;
 
 use offs::errors::{JournalApplyData, OperationApplyError};
 use offs::modify_op::ModifyOperation;
@@ -10,22 +10,23 @@ use offs::store::id_generator::LocalTempIdGenerator;
 
 use super::super::client::modify_op_builder::ModifyOpBuilder;
 use super::OffsFilesystem;
+use super::Result;
 
 impl OffsFilesystem {
-    fn prepare_and_send_journal(&mut self) -> JournalApplyData {
+    async fn prepare_and_send_journal(&mut self) -> Result<JournalApplyData> {
         let blobs_used = self.store.inner.get_temp_chunks();
-        let mut blob_ids_to_send = self.client.get_server_missing_blobs(blobs_used);
+        let mut blob_ids_to_send = self.client.get_server_missing_blobs(blobs_used).await?;
 
         loop {
             let journal = self.store.inner.get_journal();
             if journal.is_empty() {
-                return Default::default();
+                return Ok(Default::default());
             }
 
             let ops: Vec<ModifyOperation> = journal
                 .into_iter()
                 .map(|x| {
-                    let parsed: proto_types::ModifyOperation = parse_from_bytes(&x).unwrap();
+                    let parsed = proto_types::ModifyOperation::decode(x.as_slice()).unwrap();
 
                     parsed.into()
                 })
@@ -40,14 +41,17 @@ impl OffsFilesystem {
 
             let blobs_to_send = self.store.inner.get_blobs(&blob_ids_to_send);
 
-            let result = self.client.apply_journal(
-                ops,
-                chunks,
-                blobs_to_send.into_iter().map(|(_, v)| v).collect_vec(),
-            );
+            let result = self
+                .client
+                .apply_journal(
+                    ops,
+                    chunks,
+                    blobs_to_send.into_iter().map(|(_, v)| v).collect_vec(),
+                )
+                .await?;
 
             if result.is_ok() {
-                return result.ok().unwrap();
+                return Ok(result.ok().unwrap());
             }
 
             match result.err().unwrap() {
@@ -70,17 +74,16 @@ impl OffsFilesystem {
                             recreate_file_op.into();
                         self.store.inner.add_journal_entry(
                             &dirent.parent,
-                            &recreate_file_op_proto.write_to_bytes().unwrap(),
+                            &recreate_file_op_proto.encode_to_vec(),
                         );
 
                         let reset_attributes_op =
                             ModifyOpBuilder::make_reset_attributes_op(&dirent);
                         let recreate_file_op_proto: proto_types::ModifyOperation =
                             reset_attributes_op.into();
-                        self.store.inner.add_journal_entry(
-                            &new_id,
-                            &recreate_file_op_proto.write_to_bytes().unwrap(),
-                        );
+                        self.store
+                            .inner
+                            .add_journal_entry(&new_id, &recreate_file_op_proto.encode_to_vec());
                     }
 
                     transaction.commit().unwrap();
@@ -92,15 +95,15 @@ impl OffsFilesystem {
         }
     }
 
-    pub(super) fn apply_journal(&mut self) {
+    pub(super) async fn apply_journal(&mut self) -> Result<()> {
         let JournalApplyData {
             assigned_ids,
             dir_entities,
-        } = self.prepare_and_send_journal();
+        } = self.prepare_and_send_journal().await?;
         self.should_flush_journal.store(false, Ordering::Relaxed);
 
         if assigned_ids.is_empty() && dir_entities.is_empty() {
-            return;
+            return Ok(());
         }
 
         let transaction = self.store.inner.transaction();
@@ -116,5 +119,7 @@ impl OffsFilesystem {
         self.store.inner.clear_journal();
 
         transaction.commit().unwrap();
+
+        Ok(())
     }
 }

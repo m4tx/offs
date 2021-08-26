@@ -1,5 +1,3 @@
-use time::Timespec;
-
 use offs::modify_op::{
     CreateDirectoryOperation, CreateFileOperation, CreateSymlinkOperation,
     RemoveDirectoryOperation, RemoveFileOperation, RenameOperation, SetAttributesOperation,
@@ -8,6 +6,7 @@ use offs::modify_op::{
 use offs::modify_op_handler::OperationHandler;
 
 use super::OffsFilesystem;
+use offs::timespec::Timespec;
 
 impl OperationHandler for OffsFilesystem {
     fn perform_create_file(

@@ -1,20 +1,24 @@
 use std::ffi::OsStr;
 use std::path::Path;
+use std::sync::Arc;
 
-use fuse::{
+use fuser::{
     FileAttr, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen,
-    ReplyWrite, Request,
+    ReplyWrite, Request, TimeOrNow,
 };
 use libc::{S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S_IFREG, S_IFSOCK};
-use time::Timespec;
+use tokio::runtime::Runtime;
+use tokio::sync::RwLock;
 
 use offs::store::{DirEntity, FileMode, FileType};
 
 use super::error::{RemoteFsError, RemoteFsErrorKind};
 use super::OffsFilesystem;
 use super::Result;
+use std::time::{Duration, SystemTime};
+use offs::timespec::Timespec;
 
-const TTL: time::Timespec = Timespec { sec: 1, nsec: 0 };
+const TTL: Duration = Duration::from_secs(1);
 
 macro_rules! try_fs {
     ($e:expr, $reply:ident) => {
@@ -28,44 +32,56 @@ macro_rules! try_fs {
     };
 }
 
-impl OffsFilesystem {
+pub struct FuseOffsFilesystem {
+    fs: Arc<RwLock<OffsFilesystem>>,
+    rt: Runtime,
+}
+
+impl FuseOffsFilesystem {
+    pub fn new(fs: Arc<RwLock<OffsFilesystem>>, rt: Runtime) -> Self {
+        Self { fs, rt }
+    }
+}
+
+impl FuseOffsFilesystem {
     fn check_os_str(string: &OsStr) -> Result<&str> {
         string
             .to_str()
             .ok_or(RemoteFsError::new(RemoteFsErrorKind::InvalidValue))
     }
 
-    fn get_fuse_stat(&mut self, dirent: &DirEntity) -> FileAttr {
+    fn get_fuse_stat(fs: &mut OffsFilesystem, dirent: &DirEntity) -> FileAttr {
         let id = &dirent.id;
-        let inode = self.get_inode_for_id(id);
+        let inode = fs.get_inode_for_id(id);
 
         FileAttr {
             ino: inode,
             size: dirent.stat.size,
             blocks: dirent.stat.blocks,
-            atime: dirent.stat.atim,
-            mtime: dirent.stat.mtim,
-            ctime: dirent.stat.ctim,
-            crtime: Timespec { sec: 0, nsec: 0 },
-            kind: OffsFilesystem::convert_file_type(dirent.stat.file_type),
+            atime: Self::timespec_to_system_time(&dirent.stat.atim),
+            mtime: Self::timespec_to_system_time(&dirent.stat.mtim),
+            ctime: Self::timespec_to_system_time(&dirent.stat.ctim),
+            crtime: SystemTime::UNIX_EPOCH,
+            kind: Self::convert_file_type(dirent.stat.file_type),
             perm: dirent.stat.mode,
             nlink: dirent.stat.nlink as u32,
             uid: dirent.stat.uid,
             gid: dirent.stat.gid,
             rdev: dirent.stat.dev,
+            blksize: 0,
             flags: 0,
         }
     }
 
-    fn convert_file_type(store_file_type: FileType) -> fuse::FileType {
+    fn convert_file_type(store_file_type: FileType) -> fuser::FileType {
         match store_file_type {
-            FileType::NamedPipe => fuse::FileType::NamedPipe,
-            FileType::CharDevice => fuse::FileType::CharDevice,
-            FileType::BlockDevice => fuse::FileType::BlockDevice,
-            FileType::Directory => fuse::FileType::Directory,
-            FileType::RegularFile => fuse::FileType::RegularFile,
-            FileType::Symlink => fuse::FileType::Symlink,
-            FileType::Socket => fuse::FileType::Socket,
+            FileType::NamedPipe => fuser::FileType::NamedPipe,
+            FileType::CharDevice => fuser::FileType::CharDevice,
+            FileType::BlockDevice => fuser::FileType::BlockDevice,
+            FileType::Directory => fuser::FileType::Directory,
+            FileType::RegularFile => fuser::FileType::RegularFile,
+            FileType::Symlink => fuser::FileType::Symlink,
+            FileType::Socket => fuser::FileType::Socket,
         }
     }
 
@@ -88,61 +104,113 @@ impl OffsFilesystem {
             unreachable!()
         }
     }
+
+    fn timespec_to_system_time(timespec: &Timespec) -> SystemTime {
+        SystemTime::UNIX_EPOCH
+            + Duration::from_secs(timespec.sec as u64)
+            + Duration::from_nanos(timespec.nsec as u64)
+    }
+
+    fn system_time_to_timespec(system_time: &SystemTime) -> Timespec {
+        let duration = system_time.duration_since(SystemTime::UNIX_EPOCH).unwrap();
+        Timespec::new(duration.as_secs() as i64, duration.subsec_nanos())
+    }
+
+    fn time_or_now_to_timespec(time_or_now: &TimeOrNow) -> Timespec {
+        match time_or_now {
+            TimeOrNow::SpecificTime(system_time) => Self::system_time_to_timespec(system_time),
+            TimeOrNow::Now => Self::system_time_to_timespec(&SystemTime::now()),
+        }
+    }
 }
 
-impl Filesystem for OffsFilesystem {
+impl Filesystem for FuseOffsFilesystem {
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        let parent_id = try_fs!(self.get_id_by_inode(parent), reply);
-        let item = try_fs!(
-            self.query_file_by_name(&parent_id, try_fs!(Self::check_os_str(name), reply)),
-            reply
-        );
+        let fs = self.fs.clone();
+        let name = name.to_owned();
 
-        reply.entry(&TTL, &self.get_fuse_stat(&item), 1);
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
+
+            let parent_id = try_fs!(fs.get_id_by_inode(parent), reply);
+            let item = try_fs!(
+                fs.query_file_by_name(&parent_id, try_fs!(Self::check_os_str(&name), reply)),
+                reply
+            );
+
+            reply.entry(&TTL, &Self::get_fuse_stat(&mut fs, &item), 1);
+        });
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        let id = try_fs!(self.get_id_by_inode(ino), reply);
-        let item = try_fs!(self.query_file(&id), reply);
+        let fs = self.fs.clone();
 
-        reply.attr(&TTL, &self.get_fuse_stat(&item));
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
+
+            let id = try_fs!(fs.get_id_by_inode(ino), reply);
+            let item = try_fs!(fs.query_file(&id), reply);
+
+            reply.attr(&TTL, &Self::get_fuse_stat(&mut fs, &item));
+        });
     }
 
     fn setattr(
         &mut self,
-        _req: &Request,
+        _req: &Request<'_>,
         ino: u64,
         mode: Option<u32>,
         uid: Option<u32>,
         gid: Option<u32>,
         size: Option<u64>,
-        atime: Option<Timespec>,
-        mtime: Option<Timespec>,
+        atime: Option<TimeOrNow>,
+        mtime: Option<TimeOrNow>,
+        _ctime: Option<SystemTime>,
         _fh: Option<u64>,
-        _crtime: Option<Timespec>,
-        _chgtime: Option<Timespec>,
-        _bkuptime: Option<Timespec>,
+        _crtime: Option<SystemTime>,
+        _chgtime: Option<SystemTime>,
+        _bkuptime: Option<SystemTime>,
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        let id = try_fs!(self.get_id_by_inode(ino), reply).to_owned();
+        let fs = self.fs.clone();
 
-        let mode = mode.map(|x| x as FileMode);
-        let dirent = try_fs!(
-            self.set_attributes(&id, mode, uid, gid, size, atime, mtime),
-            reply
-        );
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
+            let id = try_fs!(fs.get_id_by_inode(ino), reply).to_owned();
 
-        reply.attr(&TTL, &self.get_fuse_stat(&dirent));
+            let mode = mode.map(|x| x as FileMode);
+            let dirent = try_fs!(
+                fs.set_attributes(
+                    &id,
+                    mode,
+                    uid,
+                    gid,
+                    size,
+                    atime.map(|x| Self::time_or_now_to_timespec(&x)),
+                    mtime.map(|x| Self::time_or_now_to_timespec(&x))
+                )
+                .await,
+                reply
+            );
+
+            reply.attr(&TTL, &Self::get_fuse_stat(&mut fs, &dirent));
+        });
     }
 
     fn readlink(&mut self, _req: &Request, ino: u64, reply: ReplyData) {
-        let id = try_fs!(self.get_id_by_inode(ino), reply).to_owned();
-        let dirent = try_fs!(self.update_dirent(&id, true), reply);
+        let fs = self.fs.clone();
 
-        let data = try_fs!(self.read(&id, 0, dirent.stat.size as u32), reply);
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
 
-        reply.data(&data);
+            let id = try_fs!(fs.get_id_by_inode(ino), reply).to_owned();
+            let dirent = try_fs!(fs.update_dirent(&id, true).await, reply);
+
+            let data = try_fs!(fs.read(&id, 0, dirent.stat.size as u32).await, reply);
+
+            reply.data(&data);
+        });
     }
 
     fn mknod(
@@ -151,62 +219,101 @@ impl Filesystem for OffsFilesystem {
         parent: u64,
         name: &OsStr,
         mode: u32,
+        _umask: u32,
         rdev: u32,
         reply: ReplyEntry,
     ) {
-        let parent_id = try_fs!(self.get_id_by_inode(parent), reply).clone();
+        let fs = self.fs.clone();
+        let name = name.to_owned();
 
-        let dirent = try_fs!(
-            self.create_file(
-                &parent_id,
-                try_fs!(Self::check_os_str(name), reply),
-                Self::mode_to_file_type(mode),
-                mode as FileMode,
-                rdev,
-            ),
-            reply
-        );
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
 
-        reply.entry(&TTL, &self.get_fuse_stat(&dirent), 1);
+            let parent_id = try_fs!(fs.get_id_by_inode(parent), reply).clone();
+
+            let dirent = try_fs!(
+                fs.create_file(
+                    &parent_id,
+                    try_fs!(Self::check_os_str(&name), reply),
+                    Self::mode_to_file_type(mode),
+                    mode as FileMode,
+                    rdev,
+                )
+                .await,
+                reply
+            );
+
+            reply.entry(&TTL, &Self::get_fuse_stat(&mut fs, &dirent), 1);
+        });
     }
 
-    fn mkdir(&mut self, _req: &Request, parent: u64, name: &OsStr, mode: u32, reply: ReplyEntry) {
-        let parent_id = try_fs!(self.get_id_by_inode(parent), reply).clone();
+    fn mkdir(
+        &mut self,
+        _req: &Request,
+        parent: u64,
+        name: &OsStr,
+        mode: u32,
+        _umask: u32,
+        reply: ReplyEntry,
+    ) {
+        let fs = self.fs.clone();
+        let name = name.to_owned();
 
-        let dirent = try_fs!(
-            self.create_directory(
-                &parent_id,
-                try_fs!(Self::check_os_str(name), reply),
-                mode as FileMode,
-            ),
-            reply
-        );
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
 
-        reply.entry(&TTL, &self.get_fuse_stat(&dirent), 1);
+            let parent_id = try_fs!(fs.get_id_by_inode(parent), reply).clone();
+
+            let dirent = try_fs!(
+                fs.create_directory(
+                    &parent_id,
+                    try_fs!(Self::check_os_str(&name), reply),
+                    mode as FileMode,
+                )
+                .await,
+                reply
+            );
+
+            reply.entry(&TTL, &Self::get_fuse_stat(&mut fs, &dirent), 1);
+        });
     }
 
     fn unlink(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        let parent_id = try_fs!(self.get_id_by_inode(parent), reply);
-        let item = try_fs!(
-            self.query_file_by_name(&parent_id, try_fs!(Self::check_os_str(name), reply)),
-            reply
-        );
+        let fs = self.fs.clone();
+        let name = name.to_owned();
 
-        try_fs!(self.remove_file(&item.id), reply);
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
 
-        reply.ok();
+            let parent_id = try_fs!(fs.get_id_by_inode(parent), reply);
+            let item = try_fs!(
+                fs.query_file_by_name(&parent_id, try_fs!(Self::check_os_str(&name), reply)),
+                reply
+            );
+
+            try_fs!(fs.remove_file(&item.id).await, reply);
+
+            reply.ok();
+        });
     }
 
     fn rmdir(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        let parent_id = try_fs!(self.get_id_by_inode(parent), reply);
-        let item = try_fs!(
-            self.query_file_by_name(&parent_id, try_fs!(Self::check_os_str(name), reply)),
-            reply
-        );
+        let fs = self.fs.clone();
+        let name = name.to_owned();
 
-        try_fs!(self.remove_directory(&item.id), reply);
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
 
-        reply.ok();
+            let parent_id = try_fs!(fs.get_id_by_inode(parent), reply);
+            let item = try_fs!(
+                fs.query_file_by_name(&parent_id, try_fs!(Self::check_os_str(&name), reply)),
+                reply
+            );
+
+            try_fs!(fs.remove_directory(&item.id).await, reply);
+
+            reply.ok();
+        });
     }
 
     fn symlink(
@@ -217,18 +324,27 @@ impl Filesystem for OffsFilesystem {
         link: &Path,
         reply: ReplyEntry,
     ) {
-        let parent_id = try_fs!(self.get_id_by_inode(parent), reply).clone();
+        let fs = self.fs.clone();
+        let name = name.to_owned();
+        let link = link.to_owned();
 
-        let dirent = try_fs!(
-            self.create_symlink(
-                &parent_id,
-                try_fs!(Self::check_os_str(name), reply),
-                try_fs!(Self::check_os_str(link.as_os_str()), reply),
-            ),
-            reply
-        );
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
 
-        reply.entry(&TTL, &self.get_fuse_stat(&dirent), 1);
+            let parent_id = try_fs!(fs.get_id_by_inode(parent), reply).clone();
+
+            let dirent = try_fs!(
+                fs.create_symlink(
+                    &parent_id,
+                    try_fs!(Self::check_os_str(&name), reply),
+                    try_fs!(Self::check_os_str(link.as_os_str()), reply),
+                )
+                .await,
+                reply
+            );
+
+            reply.entry(&TTL, &Self::get_fuse_stat(&mut fs, &dirent), 1);
+        });
     }
 
     fn rename(
@@ -238,35 +354,51 @@ impl Filesystem for OffsFilesystem {
         name: &OsStr,
         newparent: u64,
         newname: &OsStr,
+        _flags: u32,
         reply: ReplyEmpty,
     ) {
-        let old_parent_id = try_fs!(self.get_id_by_inode(parent), reply);
-        let new_parent_id = try_fs!(self.get_id_by_inode(newparent), reply).clone();
-        let item = try_fs!(
-            self.query_file_by_name(&old_parent_id, try_fs!(Self::check_os_str(name), reply)),
-            reply
-        );
+        let fs = self.fs.clone();
+        let name = name.to_owned();
+        let newname = newname.to_owned();
 
-        try_fs!(
-            self.rename_file(
-                &item.id,
-                &new_parent_id,
-                try_fs!(Self::check_os_str(newname), reply),
-            ),
-            reply
-        );
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
 
-        reply.ok();
+            let old_parent_id = try_fs!(fs.get_id_by_inode(parent), reply);
+            let new_parent_id = try_fs!(fs.get_id_by_inode(newparent), reply).clone();
+            let item = try_fs!(
+                fs.query_file_by_name(&old_parent_id, try_fs!(Self::check_os_str(&name), reply)),
+                reply
+            );
+
+            try_fs!(
+                fs.rename_file(
+                    &item.id,
+                    &new_parent_id,
+                    try_fs!(Self::check_os_str(&newname), reply),
+                )
+                .await,
+                reply
+            );
+
+            reply.ok();
+        });
     }
 
-    fn open(&mut self, _req: &Request, ino: u64, _flags: u32, reply: ReplyOpen) {
-        try_fs!(self.flush_write_buffer(), reply);
-        let id = try_fs!(self.get_id_by_inode(ino), reply).clone();
+    fn open(&mut self, _req: &Request, ino: u64, _flags: i32, reply: ReplyOpen) {
+        let fs = self.fs.clone();
 
-        try_fs!(self.update_dirent(&id, true), reply);
-        try_fs!(self.update_chunks(&id), reply);
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
 
-        reply.opened(0, 0);
+            try_fs!(fs.flush_write_buffer().await, reply);
+            let id = try_fs!(fs.get_id_by_inode(ino), reply).clone();
+
+            try_fs!(fs.update_dirent(&id, true).await, reply);
+            try_fs!(fs.update_chunks(&id).await, reply);
+
+            reply.opened(0, 0);
+        });
     }
 
     fn read(
@@ -276,14 +408,22 @@ impl Filesystem for OffsFilesystem {
         _fh: u64,
         offset: i64,
         size: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
-        try_fs!(self.flush_write_buffer(), reply);
-        let id = self.inodes_to_ids[&ino].clone();
+        let fs = self.fs.clone();
 
-        let data = try_fs!(self.read(&id, offset, size), reply);
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
 
-        reply.data(&data);
+            try_fs!(fs.flush_write_buffer().await, reply);
+            let id = fs.inodes_to_ids[&ino].clone();
+
+            let data = try_fs!(fs.read(&id, offset, size).await, reply);
+
+            reply.data(&data);
+        });
     }
 
     fn write(
@@ -293,14 +433,23 @@ impl Filesystem for OffsFilesystem {
         _fh: u64,
         offset: i64,
         data: &[u8],
-        _flags: u32,
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
-        let id = try_fs!(self.get_id_by_inode(ino), reply).clone();
+        let fs = self.fs.clone();
+        let data = data.to_vec();
 
-        try_fs!(self.write(&id, offset, data), reply);
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
 
-        reply.written(data.len() as u32);
+            let id = try_fs!(fs.get_id_by_inode(ino), reply).clone();
+
+            try_fs!(fs.write(&id, offset, &data).await, reply);
+
+            reply.written(data.len() as u32);
+        });
     }
 
     fn release(
@@ -308,23 +457,35 @@ impl Filesystem for OffsFilesystem {
         _req: &Request,
         ino: u64,
         _fh: u64,
-        _flags: u32,
-        _lock_owner: u64,
+        _flags: i32,
+        _lock_owner: Option<u64>,
         _flush: bool,
         reply: ReplyEmpty,
     ) {
-        let id = try_fs!(self.get_id_by_inode(ino), reply).clone();
+        let fs = self.fs.clone();
 
-        try_fs!(self.update_dirent(&id, true), reply);
-        try_fs!(self.flush_write_buffer(), reply);
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
 
-        reply.ok();
+            let id = try_fs!(fs.get_id_by_inode(ino), reply).clone();
+
+            try_fs!(fs.update_dirent(&id, true).await, reply);
+            try_fs!(fs.flush_write_buffer().await, reply);
+
+            reply.ok();
+        });
     }
 
     fn fsync(&mut self, _req: &Request, _ino: u64, _fh: u64, _datasync: bool, reply: ReplyEmpty) {
-        try_fs!(self.flush_write_buffer(), reply);
+        let fs = self.fs.clone();
 
-        reply.ok();
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
+
+            try_fs!(fs.flush_write_buffer().await, reply);
+
+            reply.ok();
+        });
     }
 
     fn readdir(
@@ -335,27 +496,42 @@ impl Filesystem for OffsFilesystem {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        let dir_id = try_fs!(self.get_id_by_inode(ino), reply).clone();
+        let fs = self.fs.clone();
 
-        try_fs!(self.update_dirent(&dir_id, true), reply);
-        let items = try_fs!(self.list_files(&dir_id), reply);
+        self.rt.spawn(async move {
+            let mut fs = fs.write().await;
 
-        let mut entries = vec![
-            (1, fuse::FileType::Directory, ".".to_owned()),
-            (1, fuse::FileType::Directory, "..".to_owned()),
-        ];
-        for dirent in items {
-            entries.push((
-                self.get_inode_for_id(&dirent.id),
-                OffsFilesystem::convert_file_type(dirent.stat.file_type),
-                dirent.name,
-            ));
-        }
+            let dir_id = try_fs!(fs.get_id_by_inode(ino), reply).clone();
 
-        let to_skip = if offset == 0 { offset } else { offset + 1 } as usize;
-        for (i, entry) in entries.into_iter().enumerate().skip(to_skip) {
-            reply.add(entry.0, i as i64, entry.1, &entry.2);
-        }
-        reply.ok();
+            try_fs!(fs.update_dirent(&dir_id, true).await, reply);
+            let items = try_fs!(fs.list_files(&dir_id).await, reply);
+
+            let mut entries = vec![
+                (1, fuser::FileType::Directory, ".".to_owned()),
+                (1, fuser::FileType::Directory, "..".to_owned()),
+            ];
+            for dirent in items {
+                entries.push((
+                    fs.get_inode_for_id(&dirent.id),
+                    Self::convert_file_type(dirent.stat.file_type),
+                    dirent.name,
+                ));
+            }
+
+            let to_skip = if offset == 0 { offset } else { offset + 1 } as usize;
+            for (i, entry) in entries.into_iter().enumerate().skip(to_skip) {
+                reply.add(entry.0, i as i64, entry.1, &entry.2);
+            }
+            reply.ok();
+        });
+    }
+}
+
+impl Drop for FuseOffsFilesystem {
+    fn drop(&mut self) {
+        let fs = self.fs.clone();
+        self.rt.block_on(async move {
+            fs.write().await.flush_write_buffer().await.unwrap();
+        });
     }
 }

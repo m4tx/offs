@@ -14,22 +14,19 @@ description = "Distributed file system with offline work support (common library
 [badges]
 travis-ci = { repository = "m4tx/offs", branch = "master" }
 
-[build-dependencies]
-protoc-grpcio = "1.0.2"
-
 [dependencies]
-grpcio = "0.4.4"
-protobuf = "2.8.0"
-futures = "0.1.28"
+rusqlite = "0.25.3"
 
-time = "0.1.42"
+rand = "0.8.4"
+num-derive = "0.3.3"
+num-traits = "0.2.14"
+itertools = "0.10.1"
+sha2 = "0.9.5"
+digest = "0.9.0"
+hex = "0.4.3"
 
-rusqlite = "0.19.0"
+tonic = "0.5.2"
+prost = "0.8.0"
 
-rand = "0.7.0"
-num-derive = "0.2.5"
-num-traits = "0.2.8"
-itertools = "0.8.0"
-sha2 = "0.8.0"
-digest = "0.8.1"
-hex = "0.3.2"
+[build-dependencies]
+tonic-build = "0.5.2"
