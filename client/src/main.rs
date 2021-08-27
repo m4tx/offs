@@ -5,6 +5,7 @@ use clap::{App, Arg};
 use nix::unistd::{fork, ForkResult};
 
 use offs::store::Store;
+use stderrlog::Timestamp;
 
 mod client;
 mod dbus_server;
@@ -49,7 +50,28 @@ fn main() {
                 .required(true)
                 .index(2),
         )
+        .arg(
+            Arg::with_name("verbosity")
+                .short("v")
+                .multiple(true)
+                .help("Increase message verbosity"),
+        )
+        .arg(
+            Arg::with_name("quiet")
+                .short("q")
+                .help("Silence all output"),
+        )
         .get_matches();
+
+    let verbose = matches.occurrences_of("verbosity") as usize;
+    let quiet = matches.is_present("quiet");
+    stderrlog::new()
+        .module(module_path!())
+        .quiet(quiet)
+        .verbosity(verbose)
+        .timestamp(Timestamp::Millisecond)
+        .init()
+        .unwrap();
 
     let store = Store::new_client(matches.value_of("cache").unwrap());
 
