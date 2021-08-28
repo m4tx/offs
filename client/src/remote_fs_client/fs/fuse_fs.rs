@@ -136,7 +136,9 @@ impl Filesystem for FuseOffsFilesystem {
         self.rt.spawn(async move {
             let mut fs = fs.write().await;
 
-            let parent_id = try_fs!(fs.get_id_by_inode(parent), reply);
+            let parent_id = try_fs!(fs.get_id_by_inode(parent), reply).to_owned();
+            // Make sure the file entry is up to date
+            try_fs!(fs.list_files(&parent_id).await, reply);
             let item = try_fs!(
                 fs.query_file_by_name(&parent_id, try_fs!(Self::check_os_str(&name), reply)),
                 reply

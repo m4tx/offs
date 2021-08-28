@@ -6,6 +6,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 use offs::modify_op;
+use offs::modify_op::ModifyOperationContent;
 use offs::modify_op_handler::OperationApplier;
 use offs::proto::filesystem::remote_fs_server::RemoteFs;
 use offs::proto::filesystem::{
@@ -107,12 +108,18 @@ impl RemoteFs for RemoteFsServerImpl {
             let mut fs = self.fs.write().await;
             let transaction = fs.store.inner.transaction();
 
-            let new_id =
-                OperationApplier::apply_operation(fs.deref_mut(), &request.into_inner().into())
-                    .ok()
-                    .unwrap();
+            let operation: offs::modify_op::ModifyOperation = request.into_inner().into();
+            let dir_entity = fs.store.inner.query_file(&operation.id);
 
-            let dir_entity = fs.store.inner.query_file(&new_id).unwrap();
+            let new_id = OperationApplier::apply_operation(fs.deref_mut(), &operation)
+                .ok()
+                .unwrap();
+
+            let dir_entity = match operation.operation {
+                ModifyOperationContent::RemoveFileOperation(_)
+                | ModifyOperationContent::RemoveDirectoryOperation(_) => dir_entity.unwrap(),
+                _ => fs.store.inner.query_file(&new_id).unwrap(),
+            };
 
             transaction.commit().unwrap();
 
