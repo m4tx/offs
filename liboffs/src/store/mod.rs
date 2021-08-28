@@ -262,7 +262,6 @@ impl<IdT: IdGenerator> Store<IdT> {
             retrieved_version: row.get("retrieved_version")?,
 
             stat: FileStat {
-                ino: 1,
                 file_type: num_traits::FromPrimitive::from_i64(row.get("file_type")?).unwrap(),
                 mode: row.get("mode")?,
                 dev: row.get("dev")?,

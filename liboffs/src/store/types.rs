@@ -17,7 +17,6 @@ pub enum FileType {
 
 #[derive(Clone, Copy, Debug)]
 pub struct FileStat {
-    pub ino: u64,
     pub file_type: FileType,
     pub mode: FileMode,
     pub dev: FileDev,

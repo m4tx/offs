@@ -87,7 +87,6 @@ impl From<proto_types::FileType> for crate_types::FileType {
 impl From<crate_types::FileStat> for proto_types::Stat {
     fn from(value: crate_types::FileStat) -> Self {
         proto_types::Stat {
-            ino: value.ino,
             file_type: value.file_type as i32,
             perm: value.mode as u32,
             nlink: value.nlink,
@@ -105,7 +104,6 @@ impl From<crate_types::FileStat> for proto_types::Stat {
 impl From<proto_types::Stat> for crate_types::FileStat {
     fn from(value: proto_types::Stat) -> Self {
         crate_types::FileStat {
-            ino: value.ino,
             file_type: FileType::from_i32(value.file_type).unwrap(),
             mode: value.perm as u16,
             dev: 0,

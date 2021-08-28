@@ -19,7 +19,6 @@ message Timespec {
 }
 
 message Stat {
-    uint64 ino = 1; // Inode number
     FileType file_type = 2; // File type and mode
     uint32 perm = 3;
     uint64 nlink = 4; // Number of hard links
