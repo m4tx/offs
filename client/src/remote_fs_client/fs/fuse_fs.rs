@@ -84,9 +84,9 @@ impl FuseHelper {
             ino: inode,
             size: dirent.stat.size,
             blocks: dirent.stat.blocks,
-            atime: Self::timespec_to_system_time(&dirent.stat.atim),
-            mtime: Self::timespec_to_system_time(&dirent.stat.mtim),
-            ctime: Self::timespec_to_system_time(&dirent.stat.ctim),
+            atime: dirent.stat.atim.into(),
+            mtime: dirent.stat.mtim.into(),
+            ctime: dirent.stat.ctim.into(),
             crtime: SystemTime::UNIX_EPOCH,
             kind: convert_file_type(dirent.stat.file_type),
             perm: dirent.stat.mode,
@@ -97,12 +97,6 @@ impl FuseHelper {
             blksize: 0,
             flags: 0,
         }
-    }
-
-    fn timespec_to_system_time(timespec: &Timespec) -> SystemTime {
-        SystemTime::UNIX_EPOCH
-            + Duration::from_secs(timespec.sec as u64)
-            + Duration::from_nanos(timespec.nsec as u64)
     }
 }
 
@@ -160,16 +154,10 @@ impl FuseOffsFilesystem {
             unreachable!()
         }
     }
-
-    fn system_time_to_timespec(system_time: &SystemTime) -> Timespec {
-        let duration = system_time.duration_since(SystemTime::UNIX_EPOCH).unwrap();
-        Timespec::new(duration.as_secs() as i64, duration.subsec_nanos())
-    }
-
     fn time_or_now_to_timespec(time_or_now: &TimeOrNow) -> Timespec {
         match time_or_now {
-            TimeOrNow::SpecificTime(system_time) => Self::system_time_to_timespec(system_time),
-            TimeOrNow::Now => Self::system_time_to_timespec(&SystemTime::now()),
+            TimeOrNow::SpecificTime(system_time) => system_time.into(),
+            TimeOrNow::Now => SystemTime::now().into(),
         }
     }
 }

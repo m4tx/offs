@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::time::{Duration, SystemTime};
 
 #[derive(Clone, Copy, Debug)]
@@ -18,9 +19,12 @@ impl Timespec {
     }
 }
 
-impl From<SystemTime> for Timespec {
-    fn from(system_time: SystemTime) -> Self {
-        let duration = system_time.duration_since(SystemTime::UNIX_EPOCH).unwrap();
+impl<B: Borrow<SystemTime>> From<B> for Timespec {
+    fn from(system_time: B) -> Self {
+        let duration = system_time
+            .borrow()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap();
         Timespec::new(duration.as_secs() as i64, duration.subsec_nanos())
     }
 }
