@@ -4,14 +4,13 @@ const BUFFER_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub struct WriteOperation {
-    pub id: String,
     pub offset: usize,
     pub data: Vec<u8>,
 }
 
 impl WriteOperation {
-    pub fn new(id: String, offset: usize, data: Vec<u8>) -> Self {
-        Self { id, offset, data }
+    pub fn new(offset: usize, data: Vec<u8>) -> Self {
+        Self { offset, data }
     }
 }
 
@@ -28,12 +27,15 @@ impl WriteBuffer {
         }
     }
 
-    pub fn add_write_op(&mut self, write_operation: WriteOperation) {
+    #[must_use]
+    pub fn write(&mut self, write_operation: WriteOperation) -> bool {
         self.size += write_operation.data.len();
         self.operations.insert(write_operation);
+
+        self.is_full()
     }
 
-    pub fn is_full(&self) -> bool {
+    fn is_full(&self) -> bool {
         self.size >= BUFFER_SIZE
     }
 
@@ -50,7 +52,7 @@ impl WriteBuffer {
             }
 
             let last = result.last_mut().unwrap();
-            if last.id == op.id && last.offset + last.data.len() == op.offset {
+            if last.offset + last.data.len() == op.offset {
                 last.data.append(&mut op.data);
             } else {
                 result.push(op);

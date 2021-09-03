@@ -15,16 +15,25 @@ use offs::timespec::Timespec;
 
 impl OffsFilesystem {
     // File operations
-    pub(super) async fn flush_write_buffer(&mut self) -> Result<()> {
-        for op in self.write_buffer.flush().into_iter() {
-            self.do_single_write(op).await?;
+    pub(super) async fn close_all_files(&mut self) -> Result<()> {
+        for fh in self.open_file_handler.get_file_handles() {
+            self.flush_write_buffer(fh).await?;
         }
 
         Ok(())
     }
 
-    async fn do_single_write(&mut self, op: WriteOperation) -> Result<()> {
-        let dirent = self.query_file(&op.id)?;
+    pub(super) async fn flush_write_buffer(&mut self, fh: u64) -> Result<()> {
+        let (id, operations) = self.open_file_handler.flush(fh);
+        for op in operations.into_iter() {
+            self.do_single_write(&id, op).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn do_single_write(&mut self, id: &str, op: WriteOperation) -> Result<()> {
+        let dirent = self.query_file(id)?;
         let operation = ModifyOpBuilder::make_write_op(&dirent, op.offset as i64, op.data);
 
         let mut dirent = self.perform_operation(operation).await?;
@@ -211,15 +220,13 @@ impl OffsFilesystem {
         Ok(dirent)
     }
 
-    pub(super) async fn write(&mut self, id: &str, offset: i64, data: &[u8]) -> Result<()> {
-        self.write_buffer.add_write_op(WriteOperation::new(
-            id.to_owned(),
-            offset as usize,
-            data.to_owned(),
-        ));
+    pub(super) async fn write(&mut self, fh: u64, offset: i64, data: Vec<u8>) -> Result<()> {
+        let should_flush = self
+            .open_file_handler
+            .write(fh, WriteOperation::new(offset as usize, data));
 
-        if self.write_buffer.is_full() {
-            self.flush_write_buffer().await?;
+        if should_flush {
+            self.flush_write_buffer(fh).await?;
         }
 
         Ok(())

@@ -8,5 +8,6 @@ mod fs;
 mod file_ops;
 mod fuse_fs;
 mod journal;
+mod open_file_handler;
 mod operation_handler;
 mod write_buffer;

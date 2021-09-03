@@ -493,13 +493,12 @@ impl Filesystem for FuseOffsFilesystem {
         self.rt.spawn(async move {
             let mut fs = fs.write().await;
 
-            try_fs!(fs.flush_write_buffer().await, reply);
             let id = try_fs!(fuse_helper.lock().await.get_id_by_inode(ino), reply).clone();
 
             try_fs!(fs.update_dirent(&id, true).await, reply);
             try_fs!(fs.update_chunks(&id).await, reply);
 
-            let fh: u64 = 0;
+            let fh = fs.open_file_handler.open_file(id);
             let flags: u32 = 0;
             debug!("Response: fh={}, flags={}", fh, flags);
             reply.opened(fh, flags);
@@ -510,7 +509,7 @@ impl Filesystem for FuseOffsFilesystem {
         &mut self,
         _req: &Request,
         ino: u64,
-        _fh: u64,
+        fh: u64,
         offset: i64,
         size: u32,
         _flags: i32,
@@ -528,7 +527,7 @@ impl Filesystem for FuseOffsFilesystem {
         self.rt.spawn(async move {
             let mut fs = fs.write().await;
 
-            try_fs!(fs.flush_write_buffer().await, reply);
+            try_fs!(fs.flush_write_buffer(fh).await, reply);
             let id = fuse_helper
                 .lock()
                 .await
@@ -546,7 +545,7 @@ impl Filesystem for FuseOffsFilesystem {
         &mut self,
         _req: &Request,
         ino: u64,
-        _fh: u64,
+        fh: u64,
         offset: i64,
         data: &[u8],
         _write_flags: u32,
@@ -560,15 +559,13 @@ impl Filesystem for FuseOffsFilesystem {
         );
 
         let fs = self.fs.clone();
-        let fuse_helper = self.fuse_helper.clone();
         let data = data.to_vec();
 
         self.rt.spawn(async move {
-            let id = try_fs!(fuse_helper.lock().await.get_id_by_inode(ino), reply).clone();
             let mut fs = fs.write().await;
 
-            try_fs!(fs.write(&id, offset, &data).await, reply);
             let rv = data.len() as u32;
+            try_fs!(fs.write(fh, offset, data).await, reply);
             debug!("Response: {:?}", rv);
             reply.written(rv);
         });
@@ -578,7 +575,7 @@ impl Filesystem for FuseOffsFilesystem {
         &mut self,
         _req: &Request,
         ino: u64,
-        _fh: u64,
+        fh: u64,
         _flags: i32,
         _lock_owner: Option<u64>,
         _flush: bool,
@@ -593,15 +590,16 @@ impl Filesystem for FuseOffsFilesystem {
             let id = try_fs!(fuse_helper.lock().await.get_id_by_inode(ino), reply).clone();
             let mut fs = fs.write().await;
 
+            try_fs!(fs.flush_write_buffer(fh).await, reply);
             try_fs!(fs.update_dirent(&id, true).await, reply);
-            try_fs!(fs.flush_write_buffer().await, reply);
+            fs.open_file_handler.close_file(fh);
 
             debug!("Response: ok");
             reply.ok();
         });
     }
 
-    fn fsync(&mut self, _req: &Request, _ino: u64, _fh: u64, _datasync: bool, reply: ReplyEmpty) {
+    fn fsync(&mut self, _req: &Request, _ino: u64, fh: u64, _datasync: bool, reply: ReplyEmpty) {
         debug!("Request(fsync)");
 
         let fs = self.fs.clone();
@@ -609,7 +607,7 @@ impl Filesystem for FuseOffsFilesystem {
         self.rt.spawn(async move {
             let mut fs = fs.write().await;
 
-            try_fs!(fs.flush_write_buffer().await, reply);
+            try_fs!(fs.flush_write_buffer(fh).await, reply);
 
             debug!("Response: ok");
             reply.ok();
@@ -665,7 +663,7 @@ impl Drop for FuseOffsFilesystem {
     fn drop(&mut self) {
         let fs = self.fs.clone();
         self.rt.block_on(async move {
-            fs.write().await.flush_write_buffer().await.unwrap();
+            fs.write().await.close_all_files().await.unwrap();
         });
     }
 }

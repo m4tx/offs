@@ -9,7 +9,7 @@ use offs::{now, ROOT_ID};
 
 use super::super::client::grpc_client::RemoteFsGrpcClient;
 use super::error::{RemoteFsError, RemoteFsErrorKind};
-use super::write_buffer::WriteBuffer;
+use crate::remote_fs_client::fs::open_file_handler::OpenFileHandler;
 
 pub type Result<T> = std::result::Result<T, RemoteFsError>;
 
@@ -33,7 +33,7 @@ pub struct OffsFilesystem {
     pub(super) should_flush_journal: Arc<AtomicBool>,
 
     pub(super) store: StoreWrapper<LocalTempIdGenerator>,
-    pub(super) write_buffer: WriteBuffer,
+    pub(super) open_file_handler: OpenFileHandler,
 }
 
 impl OffsFilesystem {
@@ -49,7 +49,7 @@ impl OffsFilesystem {
             should_flush_journal,
 
             store: StoreWrapper::new(store),
-            write_buffer: WriteBuffer::new(),
+            open_file_handler: OpenFileHandler::new(),
         };
 
         // Request the root attributes
