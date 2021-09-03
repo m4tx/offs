@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use num_traits::cast::FromPrimitive;
 
-use crate::errors::{JournalApplyData, JournalApplyResult, OperationApplyError};
+use crate::errors::{JournalApplyData, JournalApplyError, JournalApplyResult};
 use crate::modify_op;
 use crate::modify_op::ModifyOperationContent;
 use crate::proto::filesystem::apply_journal_response::Error;
@@ -406,17 +406,17 @@ impl From<JournalApplyResult> for proto_types::ApplyJournalResponse {
             }
             Err(err) => {
                 let error = match err {
-                    OperationApplyError::InvalidJournal => {
+                    JournalApplyError::InvalidJournal => {
                         let data = proto_types::InvalidJournalError {};
 
                         proto_types::apply_journal_response::Error::InvalidJournal(data)
                     }
-                    OperationApplyError::ConflictingFiles(ids) => {
+                    JournalApplyError::ConflictingFiles(ids) => {
                         let data = proto_types::ConflictingFilesError { ids };
 
                         proto_types::apply_journal_response::Error::ConflictingFiles(data)
                     }
-                    OperationApplyError::MissingBlobs(ids) => {
+                    JournalApplyError::MissingBlobs(ids) => {
                         let data = proto_types::MissingBlobsError { ids };
 
                         proto_types::apply_journal_response::Error::MissingBlobs(data)
@@ -437,11 +437,11 @@ impl Into<JournalApplyResult> for proto_types::ApplyJournalResponse {
     fn into(self) -> JournalApplyResult {
         if let Some(err) = self.error {
             let converted_error = match err {
-                Error::InvalidJournal(_) => OperationApplyError::InvalidJournal,
+                Error::InvalidJournal(_) => JournalApplyError::InvalidJournal,
                 Error::ConflictingFiles(data) => {
-                    OperationApplyError::ConflictingFiles(data.ids.into())
+                    JournalApplyError::ConflictingFiles(data.ids.into())
                 }
-                Error::MissingBlobs(data) => OperationApplyError::MissingBlobs(data.ids.into()),
+                Error::MissingBlobs(data) => JournalApplyError::MissingBlobs(data.ids.into()),
             };
 
             Err(converted_error)

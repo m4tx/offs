@@ -8,14 +8,12 @@ pub struct Timespec {
 }
 
 impl Timespec {
-    pub fn now() -> Self {
-        SystemTime::now().into()
-    }
-}
-
-impl Timespec {
     pub fn new(sec: i64, nsec: u32) -> Self {
         Self { sec, nsec }
+    }
+
+    pub fn now() -> Self {
+        SystemTime::now().into()
     }
 }
 

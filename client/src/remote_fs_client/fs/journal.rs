@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use itertools::Itertools;
 use prost::Message;
 
-use offs::errors::{JournalApplyData, OperationApplyError};
+use offs::errors::{JournalApplyData, JournalApplyError};
 use offs::modify_op::ModifyOperation;
 use offs::proto::filesystem as proto_types;
 use offs::store::id_generator::LocalTempIdGenerator;
@@ -55,10 +55,10 @@ impl OffsFilesystem {
             }
 
             match result.err().unwrap() {
-                OperationApplyError::InvalidJournal => {
+                JournalApplyError::InvalidJournal => {
                     panic!("The file operation journal is corrupted");
                 }
-                OperationApplyError::ConflictingFiles(ids) => {
+                JournalApplyError::ConflictingFiles(ids) => {
                     let transaction = self.store.inner.transaction();
 
                     for id in ids {
@@ -88,7 +88,7 @@ impl OffsFilesystem {
 
                     transaction.commit().unwrap();
                 }
-                OperationApplyError::MissingBlobs(mut ids) => {
+                JournalApplyError::MissingBlobs(mut ids) => {
                     blob_ids_to_send.append(&mut ids);
                 }
             }

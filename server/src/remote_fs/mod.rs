@@ -1,16 +1,18 @@
 use std::path::Path;
-use std::result;
 
 use itertools::Itertools;
 
-use offs::errors::{JournalApplyData, JournalApplyResult, OperationApplyError};
+use offs::errors::{
+    JournalApplyData, JournalApplyError, JournalApplyResult, OperationError, OperationErrorType,
+    OperationResult,
+};
 
 use offs::modify_op::{
     CreateDirectoryOperation, CreateFileOperation, CreateSymlinkOperation, ModifyOperation,
     ModifyOperationContent, RemoveDirectoryOperation, RemoveFileOperation, RenameOperation,
     SetAttributesOperation, WriteOperation,
 };
-use offs::modify_op_handler::{OperationApplier, OperationError, OperationHandler, Result};
+use offs::modify_op_handler::{OperationApplier, OperationHandler};
 use offs::now;
 use offs::store::id_generator::{LocalTempIdGenerator, RandomHexIdGenerator};
 use offs::store::wrapper::StoreWrapper;
@@ -24,9 +26,9 @@ use offs::timespec::Timespec;
 macro_rules! check_content_version {
     ($id:ident, $dirent:ident, $content_version:ident) => {{
         if $dirent.content_version < $content_version {
-            return Err(OperationError::InvalidOperation);
+            return Err(OperationError::invalid_content_version());
         } else if $dirent.content_version > $content_version {
-            return Err(OperationError::ConflictedFile($id.to_owned()));
+            return Err(OperationError::conflicted_file($id.to_owned()));
         }
     }};
 }
@@ -73,7 +75,7 @@ impl RemoteFs {
     pub fn apply_journal(
         &mut self,
         op_list: impl IntoIterator<Item = ModifyOperation>,
-    ) -> result::Result<(Vec<String>, Vec<String>), OperationApplyError> {
+    ) -> Result<(Vec<String>, Vec<String>), JournalApplyError> {
         let mut assigned_ids: Vec<String> = Vec::new();
         let mut processed_ids = Vec::new();
         let mut conflicted_files = Vec::new();
@@ -96,12 +98,13 @@ impl RemoteFs {
             };
 
             if result.is_err() {
-                match result.err().unwrap() {
-                    OperationError::InvalidOperation => {
-                        return Err(OperationApplyError::InvalidJournal);
+                let err = result.err().unwrap();
+                match err.error_type {
+                    OperationErrorType::ConflictedFile => {
+                        conflicted_files.push(String::from_utf8_lossy(&err.details).to_string())
                     }
-                    OperationError::ConflictedFile(id) => conflicted_files.push(id),
-                }
+                    _ => return Err(JournalApplyError::InvalidJournal),
+                };
 
                 continue;
             }
@@ -117,7 +120,7 @@ impl RemoteFs {
         if conflicted_files.is_empty() {
             Ok((assigned_ids, processed_ids))
         } else {
-            Err(OperationApplyError::ConflictingFiles(conflicted_files))
+            Err(JournalApplyError::ConflictingFiles(conflicted_files))
         }
     }
 
@@ -227,11 +230,15 @@ impl RemoteFs {
         self.store.remove_file(id, timestamp);
     }
 
-    fn remove_directory(&mut self, id: &str, timestamp: Timespec) {
+    fn remove_directory(&mut self, id: &str, timestamp: Timespec) -> OperationResult<()> {
         let dirent = self.store.inner.query_file(id).unwrap();
         self.store.inner.increment_content_version(&dirent.parent);
 
-        self.store.remove_directory(id, timestamp);
+        if self.store.inner.file_exists(id) {
+            return Err(OperationError::directory_not_empty());
+        }
+        self.store.remove_directory(id, timestamp)?;
+        Ok(())
     }
 
     fn rename(&mut self, id: &str, timestamp: Timespec, new_parent: &str, new_name: &str) {
@@ -320,8 +327,9 @@ impl OperationHandler for RemoteFs {
         id: &str,
         timestamp: Timespec,
         _operation: &RemoveDirectoryOperation,
-    ) {
-        self.remove_directory(id, timestamp);
+    ) -> OperationResult<()> {
+        self.remove_directory(id, timestamp)?;
+        Ok(())
     }
 
     fn perform_rename(&mut self, id: &str, timestamp: Timespec, operation: &RenameOperation) {
@@ -357,7 +365,7 @@ impl OperationHandler for RemoteFs {
         _dirent_version: i64,
         _content_version: i64,
         operation: &CreateFileOperation,
-    ) -> Result<String> {
+    ) -> OperationResult<String> {
         let new_name = self.get_name_if_conflicts(parent_id, &operation.name, timestamp);
 
         Ok(self.create_file(
@@ -377,7 +385,7 @@ impl OperationHandler for RemoteFs {
         _dirent_version: i64,
         _content_version: i64,
         operation: &CreateSymlinkOperation,
-    ) -> Result<String> {
+    ) -> OperationResult<String> {
         let new_name = self.get_name_if_conflicts(parent_id, &operation.name, timestamp);
 
         Ok(self.create_symlink(parent_id, timestamp, &new_name, &operation.link))
@@ -390,7 +398,7 @@ impl OperationHandler for RemoteFs {
         _dirent_version: i64,
         _content_version: i64,
         operation: &CreateDirectoryOperation,
-    ) -> Result<String> {
+    ) -> OperationResult<String> {
         let new_name = self.get_name_if_conflicts(parent_id, &operation.name, timestamp);
 
         Ok(self.create_directory(parent_id, timestamp, &new_name, operation.perm))
@@ -403,7 +411,7 @@ impl OperationHandler for RemoteFs {
         _dirent_version: i64,
         _content_version: i64,
         _operation: &RemoveFileOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         self.remove_file(id, timestamp);
 
         Ok(())
@@ -416,8 +424,8 @@ impl OperationHandler for RemoteFs {
         _dirent_version: i64,
         _content_version: i64,
         _operation: &RemoveDirectoryOperation,
-    ) -> Result<()> {
-        self.remove_directory(id, timestamp);
+    ) -> OperationResult<()> {
+        self.remove_directory(id, timestamp)?;
 
         Ok(())
     }
@@ -429,7 +437,7 @@ impl OperationHandler for RemoteFs {
         _dirent_version: i64,
         _content_version: i64,
         operation: &RenameOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         let name = self.get_name_if_conflicts_by_id(id, timestamp);
 
         self.rename(id, timestamp, &operation.new_parent, &name);
@@ -444,7 +452,7 @@ impl OperationHandler for RemoteFs {
         _dirent_version: i64,
         content_version: i64,
         operation: &SetAttributesOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         let mut size = operation.size;
 
         if size.is_some() {
@@ -478,7 +486,7 @@ impl OperationHandler for RemoteFs {
         _dirent_version: i64,
         content_version: i64,
         operation: &WriteOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         {
             let dirent = self.store.inner.query_file(id).unwrap();
             check_content_version!(id, dirent, content_version);

@@ -111,9 +111,7 @@ impl RemoteFs for RemoteFsServerImpl {
             let operation: offs::modify_op::ModifyOperation = request.into_inner().into();
             let dir_entity = fs.store.inner.query_file(&operation.id);
 
-            let new_id = OperationApplier::apply_operation(fs.deref_mut(), &operation)
-                .ok()
-                .unwrap();
+            let new_id = OperationApplier::apply_operation(fs.deref_mut(), &operation)?;
 
             let dir_entity = match operation.operation {
                 ModifyOperationContent::RemoveFileOperation(_)

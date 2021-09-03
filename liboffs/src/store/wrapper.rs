@@ -2,6 +2,7 @@ use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::iter;
 
+use crate::errors::OperationResult;
 use crate::store::id_generator::IdGenerator;
 use crate::store::{FileDev, FileMode, FileType, Store};
 use crate::timespec::Timespec;
@@ -162,12 +163,14 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         self.update_time(&dirent.parent, timestamp, false, true, true);
     }
 
-    pub fn remove_directory(&mut self, id: &str, timestamp: Timespec) {
+    pub fn remove_directory(&mut self, id: &str, timestamp: Timespec) -> OperationResult<()> {
         let dirent = self.inner.query_file(id).unwrap();
 
-        self.inner.remove_directory(id);
+        self.inner.remove_directory(id)?;
 
         self.update_time(&dirent.parent, timestamp, false, true, true);
+
+        Ok(())
     }
 
     // Modify

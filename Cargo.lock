@@ -664,6 +664,7 @@ dependencies = [
 name = "offs"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "digest",
  "hex",
  "itertools",

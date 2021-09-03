@@ -1,18 +1,10 @@
-use std::result;
-
+use crate::errors::OperationResult;
 use crate::modify_op::{
     CreateDirectoryOperation, CreateFileOperation, CreateSymlinkOperation, ModifyOperation,
     ModifyOperationContent, RemoveDirectoryOperation, RemoveFileOperation, RenameOperation,
     SetAttributesOperation, WriteOperation,
 };
 use crate::timespec::Timespec;
-
-pub enum OperationError {
-    InvalidOperation,
-    ConflictedFile(String),
-}
-
-pub type Result<T> = result::Result<T, OperationError>;
 
 pub trait OperationHandler {
     fn perform_create_file(
@@ -48,7 +40,7 @@ pub trait OperationHandler {
         id: &str,
         timestamp: Timespec,
         operation: &RemoveDirectoryOperation,
-    );
+    ) -> OperationResult<()>;
 
     fn perform_rename(&mut self, id: &str, timestamp: Timespec, operation: &RenameOperation);
 
@@ -68,7 +60,7 @@ pub trait OperationHandler {
         _dirent_version: i64,
         _content_version: i64,
         _operation: &CreateFileOperation,
-    ) -> Result<String> {
+    ) -> OperationResult<String> {
         unimplemented!()
     }
 
@@ -79,7 +71,7 @@ pub trait OperationHandler {
         _dirent_version: i64,
         _content_version: i64,
         _operation: &CreateSymlinkOperation,
-    ) -> Result<String> {
+    ) -> OperationResult<String> {
         unimplemented!()
     }
 
@@ -90,7 +82,7 @@ pub trait OperationHandler {
         _dirent_version: i64,
         _content_version: i64,
         _operation: &CreateDirectoryOperation,
-    ) -> Result<String> {
+    ) -> OperationResult<String> {
         unimplemented!()
     }
 
@@ -101,7 +93,7 @@ pub trait OperationHandler {
         _dirent_version: i64,
         _content_version: i64,
         _operation: &RemoveFileOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         unimplemented!()
     }
 
@@ -112,7 +104,7 @@ pub trait OperationHandler {
         _dirent_version: i64,
         _content_version: i64,
         _operation: &RemoveDirectoryOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         unimplemented!()
     }
 
@@ -123,7 +115,7 @@ pub trait OperationHandler {
         _dirent_version: i64,
         _content_version: i64,
         _operation: &RenameOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         unimplemented!()
     }
 
@@ -134,7 +126,7 @@ pub trait OperationHandler {
         _dirent_version: i64,
         _content_version: i64,
         _operation: &SetAttributesOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         unimplemented!()
     }
 
@@ -145,7 +137,7 @@ pub trait OperationHandler {
         _dirent_version: i64,
         _content_version: i64,
         _operation: &WriteOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         unimplemented!()
     }
 }
@@ -156,14 +148,14 @@ impl OperationApplier {
     pub fn apply_operation<T: OperationHandler>(
         handler: &mut T,
         operation: &ModifyOperation,
-    ) -> Result<String> {
+    ) -> OperationResult<String> {
         Self::apply_operation_internal(handler, operation, false)
     }
 
     pub fn apply_operation_deferred<T: OperationHandler>(
         handler: &mut T,
         operation: &ModifyOperation,
-    ) -> Result<String> {
+    ) -> OperationResult<String> {
         Self::apply_operation_internal(handler, operation, true)
     }
 
@@ -171,7 +163,7 @@ impl OperationApplier {
         handler: &mut T,
         operation: &ModifyOperation,
         deferred: bool,
-    ) -> Result<String> {
+    ) -> OperationResult<String> {
         let id: &str = &operation.id;
         let timestamp: Timespec = operation.timestamp.into();
         let dirent_version: i64 = operation.dirent_version;
@@ -271,7 +263,7 @@ impl OperationApplier {
         dirent_version: i64,
         content_version: i64,
         operation: &CreateFileOperation,
-    ) -> Result<String> {
+    ) -> OperationResult<String> {
         if deferred {
             handler.deferred_create_file(id, timestamp, dirent_version, content_version, operation)
         } else {
@@ -287,7 +279,7 @@ impl OperationApplier {
         dirent_version: i64,
         content_version: i64,
         operation: &CreateSymlinkOperation,
-    ) -> Result<String> {
+    ) -> OperationResult<String> {
         if deferred {
             handler.deferred_create_symlink(
                 id,
@@ -309,7 +301,7 @@ impl OperationApplier {
         dirent_version: i64,
         content_version: i64,
         operation: &CreateDirectoryOperation,
-    ) -> Result<String> {
+    ) -> OperationResult<String> {
         if deferred {
             handler.deferred_create_directory(
                 id,
@@ -331,7 +323,7 @@ impl OperationApplier {
         dirent_version: i64,
         content_version: i64,
         operation: &RemoveFileOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         if deferred {
             handler.deferred_remove_file(id, timestamp, dirent_version, content_version, operation)
         } else {
@@ -347,7 +339,7 @@ impl OperationApplier {
         dirent_version: i64,
         content_version: i64,
         operation: &RemoveDirectoryOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         if deferred {
             handler.deferred_remove_directory(
                 id,
@@ -357,7 +349,7 @@ impl OperationApplier {
                 operation,
             )
         } else {
-            Ok(handler.perform_remove_directory(id, timestamp, operation))
+            Ok(handler.perform_remove_directory(id, timestamp, operation)?)
         }
     }
 
@@ -369,7 +361,7 @@ impl OperationApplier {
         dirent_version: i64,
         content_version: i64,
         operation: &RenameOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         if deferred {
             handler.deferred_rename(id, timestamp, dirent_version, content_version, operation)
         } else {
@@ -385,7 +377,7 @@ impl OperationApplier {
         dirent_version: i64,
         content_version: i64,
         operation: &SetAttributesOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         if deferred {
             handler.deferred_set_attributes(
                 id,
@@ -407,7 +399,7 @@ impl OperationApplier {
         dirent_version: i64,
         content_version: i64,
         operation: &WriteOperation,
-    ) -> Result<()> {
+    ) -> OperationResult<()> {
         if deferred {
             handler.deferred_write(id, timestamp, dirent_version, content_version, operation)
         } else {

@@ -17,6 +17,7 @@ travis-ci = { repository = "m4tx/offs", branch = "master" }
 [dependencies]
 rusqlite = "0.25.3"
 
+bytes = "1.1.0"
 rand = "0.8.4"
 num-derive = "0.3.3"
 num-traits = "0.2.14"

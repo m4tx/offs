@@ -69,10 +69,8 @@ impl OffsFilesystem {
 
     // Modifications
 
-    fn apply_operation(&mut self, operation: &ModifyOperation) -> String {
-        OperationApplier::apply_operation(self, operation)
-            .ok()
-            .unwrap()
+    fn apply_operation(&mut self, operation: &ModifyOperation) -> Result<String> {
+        Ok(OperationApplier::apply_operation(self, operation)?)
     }
 
     async fn perform_operation(&mut self, operation: ModifyOperation) -> Result<DirEntity> {
@@ -85,7 +83,7 @@ impl OffsFilesystem {
 
         let transaction = self.store.inner.transaction();
 
-        let new_id = self.apply_operation(&operation);
+        let new_id = self.apply_operation(&operation)?;
 
         let journal_entry_id = self.store.inner.add_journal_entry(&id, &serialized_op);
         let dirent = if self.is_offline() {

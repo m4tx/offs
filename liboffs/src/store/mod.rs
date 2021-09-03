@@ -13,6 +13,7 @@ use crate::{ROOT_ID, SQLITE_CACHE_SIZE, SQLITE_PAGE_SIZE};
 
 use self::id_generator::IdGenerator;
 pub use self::types::{DirEntity, FileDev, FileMode, FileStat, FileType};
+use crate::errors::OperationResult;
 use crate::timespec::Timespec;
 
 pub mod id_generator;
@@ -523,12 +524,14 @@ impl<IdT: IdGenerator> Store<IdT> {
             .unwrap();
     }
 
-    pub fn remove_directory(&self, id: &str) {
+    pub fn remove_directory(&self, id: &str) -> OperationResult<()> {
         self.connection
             .lock()
             .unwrap()
             .execute("DELETE FROM file WHERE id = ?", params![id])
             .unwrap();
+
+        Ok(())
     }
 
     pub fn get_chunks(&self, id: &str) -> Vec<String> {

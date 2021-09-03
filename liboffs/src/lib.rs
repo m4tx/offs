@@ -19,6 +19,8 @@ pub const ROOT_ID: &str = "root";
 pub const SQLITE_PAGE_SIZE: i64 = 8192;
 pub const SQLITE_CACHE_SIZE: i64 = -32000; // 32MiB
 
+pub const ERROR_STATUS_CODE_HEADER_KEY: &str = "offs-status-code";
+
 pub fn now() -> Timespec {
     Timespec::now()
 }

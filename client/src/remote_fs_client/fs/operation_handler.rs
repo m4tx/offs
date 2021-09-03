@@ -6,6 +6,7 @@ use offs::modify_op::{
 use offs::modify_op_handler::OperationHandler;
 
 use super::OffsFilesystem;
+use offs::errors::OperationResult;
 use offs::timespec::Timespec;
 
 impl OperationHandler for OffsFilesystem {
@@ -59,8 +60,9 @@ impl OperationHandler for OffsFilesystem {
         id: &str,
         timestamp: Timespec,
         _operation: &RemoveDirectoryOperation,
-    ) {
-        self.store.remove_directory(id, timestamp);
+    ) -> OperationResult<()> {
+        self.store.remove_directory(id, timestamp)?;
+        Ok(())
     }
 
     fn perform_rename(&mut self, id: &str, timestamp: Timespec, operation: &RenameOperation) {
