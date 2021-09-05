@@ -298,6 +298,14 @@ impl<IdT: IdGenerator> Store<IdT> {
         stmt.exists(params![id]).unwrap()
     }
 
+    pub fn any_child_exists(&self, id: &str) -> bool {
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection
+            .prepare("SELECT 1 FROM file WHERE parent = ?")
+            .unwrap();
+        stmt.exists(params![id]).unwrap()
+    }
+
     pub fn file_exists_by_name(&self, parent_id: &str, name: &str) -> bool {
         let connection = self.connection.lock().unwrap();
         let mut stmt = connection

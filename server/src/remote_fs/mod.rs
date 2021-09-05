@@ -124,7 +124,21 @@ impl RemoteFs {
         }
     }
 
-    fn get_conflicted_name(&mut self, parent_id: &str, name: &str, timestamp: Timespec) -> String {
+    fn get_name_if_conflicts_by_id(&self, id: &str, timestamp: Timespec) -> String {
+        let dirent = self.store.inner.query_file(id).unwrap();
+
+        self.get_name_if_conflicts(&dirent.parent, &dirent.name, timestamp)
+    }
+
+    fn get_name_if_conflicts(&self, parent_id: &str, name: &str, timestamp: Timespec) -> String {
+        if self.store.inner.file_exists_by_name(parent_id, name) {
+            self.get_conflicted_name(parent_id, name, timestamp)
+        } else {
+            name.to_owned()
+        }
+    }
+
+    fn get_conflicted_name(&self, parent_id: &str, name: &str, timestamp: Timespec) -> String {
         let path = Path::new(name);
 
         let name = path.file_stem().unwrap().to_str().unwrap();
@@ -162,25 +176,6 @@ impl RemoteFs {
 
         // We shouldn't ever get here, as there is an infinite loop above
         unreachable!();
-    }
-
-    fn get_name_if_conflicts(
-        &mut self,
-        parent_id: &str,
-        name: &str,
-        timestamp: Timespec,
-    ) -> String {
-        if self.store.inner.file_exists_by_name(parent_id, name) {
-            self.get_conflicted_name(parent_id, name, timestamp)
-        } else {
-            name.to_owned()
-        }
-    }
-
-    fn get_name_if_conflicts_by_id(&mut self, id: &str, timestamp: Timespec) -> String {
-        let dirent = self.store.inner.query_file(id).unwrap();
-
-        self.get_name_if_conflicts(&dirent.parent, &dirent.name, timestamp)
     }
 
     fn create_file(
@@ -234,7 +229,7 @@ impl RemoteFs {
         let dirent = self.store.inner.query_file(id).unwrap();
         self.store.inner.increment_content_version(&dirent.parent);
 
-        if self.store.inner.file_exists(id) {
+        if self.store.inner.any_child_exists(id) {
             return Err(OperationError::directory_not_empty());
         }
         self.store.remove_directory(id, timestamp)?;
