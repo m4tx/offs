@@ -8,9 +8,9 @@ use offs::proto::filesystem as proto_types;
 use offs::store::{DirEntity, FileDev, FileMode, FileType};
 
 use super::super::client::modify_op_builder::ModifyOpBuilder;
-use super::error::{RemoteFsError, RemoteFsErrorKind};
 use super::write_buffer::WriteOperation;
 use super::{OffsFilesystem, Result};
+use offs::errors::OperationError;
 use offs::timespec::Timespec;
 
 impl OffsFilesystem {

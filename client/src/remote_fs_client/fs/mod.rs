@@ -2,7 +2,7 @@ pub use fs::OffsFilesystem;
 pub use fs::Result;
 pub use fuse_fs::FuseOffsFilesystem;
 
-mod error;
+mod errors;
 #[macro_use]
 mod fs;
 mod file_ops;

@@ -8,14 +8,14 @@ use offs::store::{DirEntity, Store};
 use offs::{now, ROOT_ID};
 
 use super::super::client::grpc_client::RemoteFsGrpcClient;
-use super::error::{RemoteFsError, RemoteFsErrorKind};
 use crate::remote_fs_client::fs::open_file_handler::OpenFileHandler;
+use offs::errors::{OperationError, OperationResult};
 
-pub type Result<T> = std::result::Result<T, RemoteFsError>;
+pub type Result<T> = OperationResult<T>;
 
 macro_rules! err_offline {
     () => {
-        return Err(RemoteFsError::new(RemoteFsErrorKind::Offline));
+        return Err(OperationError::offline("The client is currently offline"));
     };
 }
 
@@ -67,14 +67,13 @@ impl OffsFilesystem {
         self.store
             .inner
             .query_file(id)?
-            .ok_or(RemoteFsError::new(RemoteFsErrorKind::NoEntry))
+            .ok_or(OperationError::file_does_not_exist(&format!("id={}", id)))
     }
 
     pub(super) fn query_file_by_name(&self, parent_id: &str, name: &str) -> Result<DirEntity> {
-        self.store
-            .inner
-            .query_file_by_name(parent_id, name)?
-            .ok_or(RemoteFsError::new(RemoteFsErrorKind::NoEntry))
+        self.store.inner.query_file_by_name(parent_id, name)?.ok_or(
+            OperationError::file_does_not_exist(&format!("parent={}, name={}", parent_id, name)),
+        )
     }
 
     pub(super) fn add_dirent(&mut self, dirent: &mut DirEntity) -> Result<()> {

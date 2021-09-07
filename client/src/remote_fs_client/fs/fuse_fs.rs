@@ -15,9 +15,10 @@ use tokio::sync::{Mutex, RwLock};
 use offs::store::{DirEntity, FileMode, FileType};
 use offs::timespec::Timespec;
 
-use super::error::{RemoteFsError, RemoteFsErrorKind};
+use super::errors::to_os_error;
 use super::OffsFilesystem;
 use super::Result;
+use offs::errors::OperationError;
 use offs::ROOT_ID;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -29,7 +30,7 @@ macro_rules! try_fs {
         match $e {
             Ok(val) => val,
             Err(e) => {
-                $reply.error(e.to_os_error());
+                $reply.error(to_os_error(&e));
                 debug!("Response: {:?}", e);
                 return;
             }
@@ -72,7 +73,10 @@ impl FuseHelper {
         self.inodes_to_ids
             .borrow()
             .get(&inode)
-            .ok_or(RemoteFsError::new(RemoteFsErrorKind::NoEntry))
+            .ok_or(OperationError::file_does_not_exist(&format!(
+                "inode={}",
+                inode
+            )))
             .map(|x| x.to_owned())
     }
 
@@ -130,9 +134,7 @@ impl FuseOffsFilesystem {
 
 impl FuseOffsFilesystem {
     fn check_os_str(string: &OsStr) -> Result<&str> {
-        string
-            .to_str()
-            .ok_or(RemoteFsError::new(RemoteFsErrorKind::InvalidValue))
+        string.to_str().ok_or(OperationError::invalid_unicode())
     }
 
     fn mode_to_file_type(mode: u32) -> FileType {

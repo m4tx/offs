@@ -6,7 +6,7 @@ use bytes::Bytes;
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
 use rusqlite::Error;
-use tonic::Code;
+use tonic::{Code, Status};
 
 use crate::store::DirEntity;
 use crate::ERROR_STATUS_CODE_HEADER_KEY;
@@ -18,6 +18,9 @@ pub enum OperationErrorType {
     ConflictedFile,
     InvalidContentVersion,
     BlobDoesNotExist,
+    Offline,
+    FileDoesNotExist,
+    InvalidUnicode,
 }
 
 impl Into<Code> for OperationErrorType {
@@ -28,6 +31,9 @@ impl Into<Code> for OperationErrorType {
             OperationErrorType::ConflictedFile => Code::AlreadyExists,
             OperationErrorType::InvalidContentVersion => Code::FailedPrecondition,
             OperationErrorType::BlobDoesNotExist => Code::InvalidArgument,
+            OperationErrorType::Offline => Code::Unavailable,
+            OperationErrorType::FileDoesNotExist => Code::InvalidArgument,
+            OperationErrorType::InvalidUnicode => Code::InvalidArgument,
         }
     }
 }
@@ -87,6 +93,27 @@ impl OperationError {
             details: Default::default(),
         }
     }
+
+    pub fn offline(message: &str) -> Self {
+        Self::new(
+            OperationErrorType::Offline,
+            format!("Connection error: {}", message),
+        )
+    }
+
+    pub fn file_does_not_exist(id: &str) -> Self {
+        Self::new(
+            OperationErrorType::FileDoesNotExist,
+            format!("File {} does not exist", id),
+        )
+    }
+
+    pub fn invalid_unicode() -> Self {
+        Self::new(
+            OperationErrorType::InvalidUnicode,
+            "Invalid unicode string".to_owned(),
+        )
+    }
 }
 
 impl Display for OperationError {
@@ -124,12 +151,13 @@ impl From<OperationError> for tonic::Status {
     }
 }
 
-impl Into<OperationError> for tonic::Status {
-    fn into(self) -> OperationError {
-        OperationError::with_details(
+impl From<tonic::Status> for OperationError {
+    fn from(status: Status) -> Self {
+        Self::with_details(
             FromPrimitive::from_u64(
                 u64::from_str(
-                    self.metadata()
+                    status
+                        .metadata()
                         .get(ERROR_STATUS_CODE_HEADER_KEY)
                         .unwrap()
                         .to_str()
@@ -138,9 +166,15 @@ impl Into<OperationError> for tonic::Status {
                 .unwrap(),
             )
             .unwrap(),
-            self.message().to_owned(),
-            Bytes::copy_from_slice(self.details()),
+            status.message().to_owned(),
+            Bytes::copy_from_slice(status.details()),
         )
+    }
+}
+
+impl From<tonic::transport::Error> for OperationError {
+    fn from(error: tonic::transport::Error) -> Self {
+        OperationError::offline(&error.to_string())
     }
 }
 
