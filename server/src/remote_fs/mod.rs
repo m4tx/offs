@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use itertools::Itertools;
-
 use offs::errors::{
     JournalApplyData, JournalApplyError, JournalApplyResult, OperationError, OperationErrorType,
     OperationResult,
@@ -39,12 +37,12 @@ pub struct RemoteFs {
 }
 
 impl RemoteFs {
-    pub fn new(mut store: Store<RandomHexIdGenerator>) -> Self {
-        store.create_root_directory(0o755, now());
+    pub fn new(mut store: Store<RandomHexIdGenerator>) -> OperationResult<Self> {
+        store.create_root_directory(0o755, now())?;
 
-        Self {
+        Ok(Self {
             store: StoreWrapper::new(store),
-        }
+        })
     }
 
     pub fn apply_full_journal(
@@ -56,14 +54,15 @@ impl RemoteFs {
         let (assigned_ids, processed_ids) = self.apply_journal(op_list)?;
         let dir_entities = processed_ids
             .iter()
-            .filter_map(|id| self.store.inner.query_file(id))
-            .collect_vec();
+            .filter_map(|id| self.store.inner.query_file(id).unwrap())
+            .collect();
 
-        self.store.inner.add_blobs(blobs);
+        self.store.inner.add_blobs(blobs).unwrap();
         for (id, file_chunks) in assigned_ids.iter().zip(chunks.into_iter()) {
             self.store
                 .inner
-                .replace_chunks(id, file_chunks.into_iter().enumerate());
+                .replace_chunks(id, file_chunks.into_iter().enumerate())
+                .unwrap();
         }
 
         Ok(JournalApplyData {
@@ -124,21 +123,37 @@ impl RemoteFs {
         }
     }
 
-    fn get_name_if_conflicts_by_id(&self, id: &str, timestamp: Timespec) -> String {
-        let dirent = self.store.inner.query_file(id).unwrap();
+    fn get_name_if_conflicts_by_id(
+        &self,
+        id: &str,
+        timestamp: Timespec,
+    ) -> OperationResult<String> {
+        let dirent = self.store.inner.query_file(id)?.unwrap();
 
-        self.get_name_if_conflicts(&dirent.parent, &dirent.name, timestamp)
+        Ok(self.get_name_if_conflicts(&dirent.parent, &dirent.name, timestamp)?)
     }
 
-    fn get_name_if_conflicts(&self, parent_id: &str, name: &str, timestamp: Timespec) -> String {
-        if self.store.inner.file_exists_by_name(parent_id, name) {
-            self.get_conflicted_name(parent_id, name, timestamp)
+    fn get_name_if_conflicts(
+        &self,
+        parent_id: &str,
+        name: &str,
+        timestamp: Timespec,
+    ) -> OperationResult<String> {
+        let result = if self.store.inner.file_exists_by_name(parent_id, name)? {
+            self.get_conflicted_name(parent_id, name, timestamp)?
         } else {
             name.to_owned()
-        }
+        };
+
+        Ok(result)
     }
 
-    fn get_conflicted_name(&self, parent_id: &str, name: &str, timestamp: Timespec) -> String {
+    fn get_conflicted_name(
+        &self,
+        parent_id: &str,
+        name: &str,
+        timestamp: Timespec,
+    ) -> OperationResult<String> {
         let path = Path::new(name);
 
         let name = path.file_stem().unwrap().to_str().unwrap();
@@ -150,8 +165,8 @@ impl RemoteFs {
         let date_str = datetime.format("%Y-%m-%d").to_string();
 
         let new_name = format!("{} (Conflicted copy {}){}", name, date_str, ext);
-        if !self.store.inner.file_exists_by_name(parent_id, &new_name) {
-            return new_name;
+        if !self.store.inner.file_exists_by_name(parent_id, &new_name)? {
+            return Ok(new_name);
         }
 
         // Windows does not support colons in filenames, so we have to work around that
@@ -160,8 +175,8 @@ impl RemoteFs {
             "{} (Conflicted copy {} {}){}",
             name, date_str, time_str, ext
         );
-        if !self.store.inner.file_exists_by_name(parent_id, &new_name) {
-            return new_name;
+        if !self.store.inner.file_exists_by_name(parent_id, &new_name)? {
+            return Ok(new_name);
         }
 
         for i in 2.. {
@@ -169,8 +184,8 @@ impl RemoteFs {
                 "{} (Conflicted copy {} {}) ({}) {}",
                 name, date_str, time_str, i, ext
             );
-            if !self.store.inner.file_exists_by_name(parent_id, &new_name) {
-                return new_name;
+            if !self.store.inner.file_exists_by_name(parent_id, &new_name)? {
+                return Ok(new_name);
             }
         }
 
@@ -186,11 +201,12 @@ impl RemoteFs {
         file_type: FileType,
         mode: FileMode,
         dev: FileDev,
-    ) -> String {
-        self.store.inner.increment_content_version(parent_id);
+    ) -> OperationResult<String> {
+        self.store.inner.increment_content_version(parent_id)?;
 
-        self.store
-            .create_file(parent_id, timestamp, name, file_type, mode, dev)
+        Ok(self
+            .store
+            .create_file(parent_id, timestamp, name, file_type, mode, dev)?)
     }
 
     fn create_symlink(
@@ -199,10 +215,12 @@ impl RemoteFs {
         timestamp: Timespec,
         name: &str,
         link: &str,
-    ) -> String {
-        self.store.inner.increment_content_version(parent_id);
+    ) -> OperationResult<String> {
+        self.store.inner.increment_content_version(parent_id)?;
 
-        self.store.create_symlink(parent_id, timestamp, name, link)
+        Ok(self
+            .store
+            .create_symlink(parent_id, timestamp, name, link)?)
     }
 
     fn create_directory(
@@ -211,38 +229,50 @@ impl RemoteFs {
         timestamp: Timespec,
         name: &str,
         mode: FileMode,
-    ) -> String {
-        self.store.inner.increment_content_version(parent_id);
+    ) -> OperationResult<String> {
+        self.store.inner.increment_content_version(parent_id)?;
 
-        self.store
-            .create_directory(parent_id, timestamp, name, mode)
+        Ok(self
+            .store
+            .create_directory(parent_id, timestamp, name, mode)?)
     }
 
-    fn remove_file(&mut self, id: &str, timestamp: Timespec) {
-        let dirent = self.store.inner.query_file(id).unwrap();
-        self.store.inner.increment_content_version(&dirent.parent);
+    fn remove_file(&mut self, id: &str, timestamp: Timespec) -> OperationResult<()> {
+        let dirent = self.store.inner.query_file(id)?.unwrap();
+        self.store.inner.increment_content_version(&dirent.parent)?;
 
-        self.store.remove_file(id, timestamp);
-    }
+        self.store.remove_file(id, timestamp)?;
 
-    fn remove_directory(&mut self, id: &str, timestamp: Timespec) -> OperationResult<()> {
-        let dirent = self.store.inner.query_file(id).unwrap();
-        self.store.inner.increment_content_version(&dirent.parent);
-
-        if self.store.inner.any_child_exists(id) {
-            return Err(OperationError::directory_not_empty());
-        }
-        self.store.remove_directory(id, timestamp)?;
         Ok(())
     }
 
-    fn rename(&mut self, id: &str, timestamp: Timespec, new_parent: &str, new_name: &str) {
-        let dirent = self.store.inner.query_file(id).unwrap();
-        self.store.inner.increment_content_version(&dirent.parent);
-        self.store.inner.increment_content_version(&new_parent);
-        self.store.inner.increment_dirent_version(id);
+    fn remove_directory(&mut self, id: &str, timestamp: Timespec) -> OperationResult<()> {
+        let dirent = self.store.inner.query_file(id)?.unwrap();
+        self.store.inner.increment_content_version(&dirent.parent)?;
 
-        self.store.rename(id, timestamp, new_parent, new_name);
+        if self.store.inner.any_child_exists(id)? {
+            return Err(OperationError::directory_not_empty());
+        }
+        self.store.remove_directory(id, timestamp)?;
+
+        Ok(())
+    }
+
+    fn rename(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        new_parent: &str,
+        new_name: &str,
+    ) -> OperationResult<()> {
+        let dirent = self.store.inner.query_file(id)?.unwrap();
+        self.store.inner.increment_content_version(&dirent.parent)?;
+        self.store.inner.increment_content_version(&new_parent)?;
+        self.store.inner.increment_dirent_version(id)?;
+
+        self.store.rename(id, timestamp, new_parent, new_name)?;
+
+        Ok(())
     }
 
     fn set_attributes(
@@ -255,21 +285,31 @@ impl RemoteFs {
         size: Option<u64>,
         atim: Option<Timespec>,
         mtim: Option<Timespec>,
-    ) {
+    ) -> OperationResult<()> {
         if size.is_some() {
-            self.store.inner.increment_content_version(id);
+            self.store.inner.increment_content_version(id)?;
         } else {
-            self.store.inner.increment_dirent_version(id);
+            self.store.inner.increment_dirent_version(id)?;
         }
 
         self.store
-            .set_attributes(id, timestamp, mode, uid, gid, size, atim, mtim);
+            .set_attributes(id, timestamp, mode, uid, gid, size, atim, mtim)?;
+
+        Ok(())
     }
 
-    fn write(&mut self, id: &str, timestamp: Timespec, offset: usize, data: &[u8]) {
-        self.store.inner.increment_content_version(id);
+    fn write(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        offset: usize,
+        data: &[u8],
+    ) -> OperationResult<()> {
+        self.store.inner.increment_content_version(id)?;
 
-        self.store.write(id, timestamp, offset, data);
+        self.store.write(id, timestamp, offset, data)?;
+
+        Ok(())
     }
 }
 
@@ -279,15 +319,15 @@ impl OperationHandler for RemoteFs {
         parent_id: &str,
         timestamp: Timespec,
         operation: &CreateFileOperation,
-    ) -> String {
-        self.create_file(
+    ) -> OperationResult<String> {
+        Ok(self.create_file(
             parent_id,
             timestamp,
             &operation.name,
             operation.file_type,
             operation.perm,
             operation.dev,
-        )
+        )?)
     }
 
     fn perform_create_symlink(
@@ -295,8 +335,8 @@ impl OperationHandler for RemoteFs {
         parent_id: &str,
         timestamp: Timespec,
         operation: &CreateSymlinkOperation,
-    ) -> String {
-        self.create_symlink(parent_id, timestamp, &operation.name, &operation.link)
+    ) -> OperationResult<String> {
+        Ok(self.create_symlink(parent_id, timestamp, &operation.name, &operation.link)?)
     }
 
     fn perform_create_directory(
@@ -304,8 +344,8 @@ impl OperationHandler for RemoteFs {
         parent_id: &str,
         timestamp: Timespec,
         operation: &CreateDirectoryOperation,
-    ) -> String {
-        self.create_directory(parent_id, timestamp, &operation.name, operation.perm)
+    ) -> OperationResult<String> {
+        Ok(self.create_directory(parent_id, timestamp, &operation.name, operation.perm)?)
     }
 
     fn perform_remove_file(
@@ -313,8 +353,9 @@ impl OperationHandler for RemoteFs {
         id: &str,
         timestamp: Timespec,
         _operation: &RemoveFileOperation,
-    ) {
-        self.remove_file(id, timestamp);
+    ) -> OperationResult<()> {
+        self.remove_file(id, timestamp)?;
+        Ok(())
     }
 
     fn perform_remove_directory(
@@ -327,8 +368,14 @@ impl OperationHandler for RemoteFs {
         Ok(())
     }
 
-    fn perform_rename(&mut self, id: &str, timestamp: Timespec, operation: &RenameOperation) {
-        self.rename(id, timestamp, &operation.new_parent, &operation.new_name);
+    fn perform_rename(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        operation: &RenameOperation,
+    ) -> OperationResult<()> {
+        self.rename(id, timestamp, &operation.new_parent, &operation.new_name)?;
+        Ok(())
     }
 
     fn perform_set_attributes(
@@ -336,7 +383,7 @@ impl OperationHandler for RemoteFs {
         id: &str,
         timestamp: Timespec,
         operation: &SetAttributesOperation,
-    ) {
+    ) -> OperationResult<()> {
         self.set_attributes(
             id,
             timestamp,
@@ -346,11 +393,20 @@ impl OperationHandler for RemoteFs {
             operation.size,
             operation.atim,
             operation.mtim,
-        );
+        )?;
+
+        Ok(())
     }
 
-    fn perform_write(&mut self, id: &str, timestamp: Timespec, operation: &WriteOperation) {
-        self.write(id, timestamp, operation.offset as usize, &operation.data);
+    fn perform_write(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        operation: &WriteOperation,
+    ) -> OperationResult<()> {
+        self.write(id, timestamp, operation.offset as usize, &operation.data)?;
+
+        Ok(())
     }
 
     fn deferred_create_file(
@@ -361,7 +417,7 @@ impl OperationHandler for RemoteFs {
         _content_version: i64,
         operation: &CreateFileOperation,
     ) -> OperationResult<String> {
-        let new_name = self.get_name_if_conflicts(parent_id, &operation.name, timestamp);
+        let new_name = self.get_name_if_conflicts(parent_id, &operation.name, timestamp)?;
 
         Ok(self.create_file(
             parent_id,
@@ -370,7 +426,7 @@ impl OperationHandler for RemoteFs {
             operation.file_type,
             operation.perm,
             operation.dev,
-        ))
+        )?)
     }
 
     fn deferred_create_symlink(
@@ -381,9 +437,9 @@ impl OperationHandler for RemoteFs {
         _content_version: i64,
         operation: &CreateSymlinkOperation,
     ) -> OperationResult<String> {
-        let new_name = self.get_name_if_conflicts(parent_id, &operation.name, timestamp);
+        let new_name = self.get_name_if_conflicts(parent_id, &operation.name, timestamp)?;
 
-        Ok(self.create_symlink(parent_id, timestamp, &new_name, &operation.link))
+        Ok(self.create_symlink(parent_id, timestamp, &new_name, &operation.link)?)
     }
 
     fn deferred_create_directory(
@@ -394,9 +450,9 @@ impl OperationHandler for RemoteFs {
         _content_version: i64,
         operation: &CreateDirectoryOperation,
     ) -> OperationResult<String> {
-        let new_name = self.get_name_if_conflicts(parent_id, &operation.name, timestamp);
+        let new_name = self.get_name_if_conflicts(parent_id, &operation.name, timestamp)?;
 
-        Ok(self.create_directory(parent_id, timestamp, &new_name, operation.perm))
+        Ok(self.create_directory(parent_id, timestamp, &new_name, operation.perm)?)
     }
 
     fn deferred_remove_file(
@@ -407,7 +463,7 @@ impl OperationHandler for RemoteFs {
         _content_version: i64,
         _operation: &RemoveFileOperation,
     ) -> OperationResult<()> {
-        self.remove_file(id, timestamp);
+        self.remove_file(id, timestamp)?;
 
         Ok(())
     }
@@ -433,9 +489,9 @@ impl OperationHandler for RemoteFs {
         _content_version: i64,
         operation: &RenameOperation,
     ) -> OperationResult<()> {
-        let name = self.get_name_if_conflicts_by_id(id, timestamp);
+        let name = self.get_name_if_conflicts_by_id(id, timestamp)?;
 
-        self.rename(id, timestamp, &operation.new_parent, &name);
+        self.rename(id, timestamp, &operation.new_parent, &name)?;
 
         Ok(())
     }
@@ -451,7 +507,7 @@ impl OperationHandler for RemoteFs {
         let mut size = operation.size;
 
         if size.is_some() {
-            let dirent = self.store.inner.query_file(id).unwrap();
+            let dirent = self.store.inner.query_file(id)?.unwrap();
 
             if dirent.stat.has_size() {
                 check_content_version!(id, dirent, content_version);
@@ -469,7 +525,7 @@ impl OperationHandler for RemoteFs {
             size,
             operation.atim,
             operation.mtim,
-        );
+        )?;
 
         Ok(())
     }
@@ -483,11 +539,11 @@ impl OperationHandler for RemoteFs {
         operation: &WriteOperation,
     ) -> OperationResult<()> {
         {
-            let dirent = self.store.inner.query_file(id).unwrap();
+            let dirent = self.store.inner.query_file(id)?.unwrap();
             check_content_version!(id, dirent, content_version);
         }
 
-        self.write(id, timestamp, operation.offset as usize, &operation.data);
+        self.write(id, timestamp, operation.offset as usize, &operation.data)?;
 
         Ok(())
     }

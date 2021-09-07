@@ -17,7 +17,7 @@ pub async fn run_server(
     Server::builder()
         .add_service(RemoteFsServer::new(RemoteFsServerImpl::new(RemoteFs::new(
             store,
-        ))))
+        )?)))
         .serve(address)
         .await?;
 

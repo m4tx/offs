@@ -66,27 +66,39 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         vec
     }
 
-    fn get_blobs_for_read(&mut self, id: &str, offset: i64, size: u32) -> Vec<String> {
-        let chunks = self.inner.get_chunks(id);
+    fn get_blobs_for_read(
+        &mut self,
+        id: &str,
+        offset: i64,
+        size: u32,
+    ) -> OperationResult<Vec<String>> {
+        let chunks = self.inner.get_chunks(id)?;
         let (start_chunk, end_chunk) = Self::get_start_end_chunks(offset, size, chunks.len());
 
-        if start_chunk >= chunks.len() {
+        let result = if start_chunk >= chunks.len() {
             Vec::new()
         } else {
             chunks[start_chunk..end_chunk].to_vec()
-        }
+        };
+
+        Ok(result)
     }
 
-    pub fn get_missing_blobs_for_read(&mut self, id: &str, offset: i64, size: u32) -> Vec<String> {
-        let chunks = self.get_blobs_for_read(id, offset, size);
-        self.inner.get_missing_blobs(&chunks)
+    pub fn get_missing_blobs_for_read(
+        &mut self,
+        id: &str,
+        offset: i64,
+        size: u32,
+    ) -> OperationResult<Vec<String>> {
+        let chunks = self.get_blobs_for_read(id, offset, size)?;
+        Ok(self.inner.get_missing_blobs(&chunks)?)
     }
 
-    pub fn read(&mut self, id: &str, offset: i64, size: u32) -> Vec<u8> {
-        let chunks = self.get_blobs_for_read(id, offset, size);
-        let blobs = self.inner.get_blobs(chunks.iter());
+    pub fn read(&mut self, id: &str, offset: i64, size: u32) -> OperationResult<Vec<u8>> {
+        let chunks = self.get_blobs_for_read(id, offset, size)?;
+        let blobs = self.inner.get_blobs(chunks.iter())?;
 
-        self.get_data(&chunks, &blobs, offset, size)
+        Ok(self.get_data(&chunks, &blobs, offset, size))
     }
 
     pub fn update_time(
@@ -96,13 +108,15 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         update_atime: bool,
         update_mtime: bool,
         update_ctime: bool,
-    ) {
+    ) -> OperationResult<()> {
         let atime = if update_atime { Some(timestamp) } else { None };
         let mtime = if update_mtime { Some(timestamp) } else { None };
         let ctime = if update_ctime { Some(timestamp) } else { None };
 
         self.inner
-            .set_attributes(id, None, None, None, None, atime, mtime, ctime);
+            .set_attributes(id, None, None, None, None, atime, mtime, ctime)?;
+
+        Ok(())
     }
 
     // Create
@@ -114,14 +128,14 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         file_type: FileType,
         mode: FileMode,
         dev: FileDev,
-    ) -> String {
+    ) -> OperationResult<String> {
         let id = self
             .inner
-            .create_file(parent_id, name, file_type, mode, dev, timestamp);
+            .create_file(parent_id, name, file_type, mode, dev, timestamp)?;
 
-        self.update_time(parent_id, timestamp, false, true, true);
+        self.update_time(parent_id, timestamp, false, true, true)?;
 
-        id
+        Ok(id)
     }
 
     pub fn create_directory(
@@ -130,14 +144,14 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         timestamp: Timespec,
         name: &str,
         mode: FileMode,
-    ) -> String {
+    ) -> OperationResult<String> {
         let id = self
             .inner
-            .create_directory(parent_id, name, mode, timestamp);
+            .create_directory(parent_id, name, mode, timestamp)?;
 
-        self.update_time(parent_id, timestamp, false, true, true);
+        self.update_time(parent_id, timestamp, false, true, true)?;
 
-        id
+        Ok(id)
     }
 
     pub fn create_symlink(
@@ -146,62 +160,72 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         timestamp: Timespec,
         name: &str,
         link: &str,
-    ) -> String {
-        let id = self.create_file(parent_id, timestamp, name, FileType::Symlink, 0o777, 0);
+    ) -> OperationResult<String> {
+        let id = self.create_file(parent_id, timestamp, name, FileType::Symlink, 0o777, 0)?;
 
-        self.write(&id, timestamp, 0, link.as_bytes());
+        self.write(&id, timestamp, 0, link.as_bytes())?;
 
-        id
+        Ok(id)
     }
 
     // Remove
-    pub fn remove_file(&mut self, id: &str, timestamp: Timespec) {
-        let dirent = self.inner.query_file(id).unwrap();
+    pub fn remove_file(&mut self, id: &str, timestamp: Timespec) -> OperationResult<()> {
+        let dirent = self.inner.query_file(id)?.unwrap();
 
-        self.inner.remove_file(id);
+        self.inner.remove_file(id)?;
 
-        self.update_time(&dirent.parent, timestamp, false, true, true);
+        self.update_time(&dirent.parent, timestamp, false, true, true)?;
+
+        Ok(())
     }
 
     pub fn remove_directory(&mut self, id: &str, timestamp: Timespec) -> OperationResult<()> {
-        let dirent = self.inner.query_file(id).unwrap();
+        let dirent = self.inner.query_file(id)?.unwrap();
 
         self.inner.remove_directory(id)?;
 
-        self.update_time(&dirent.parent, timestamp, false, true, true);
+        self.update_time(&dirent.parent, timestamp, false, true, true)?;
 
         Ok(())
     }
 
     // Modify
-    pub fn rename(&mut self, id: &str, timestamp: Timespec, new_parent: &str, new_name: &str) {
-        let dirent = self.inner.query_file(id).unwrap();
+    pub fn rename(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        new_parent: &str,
+        new_name: &str,
+    ) -> OperationResult<()> {
+        let dirent = self.inner.query_file(id)?.unwrap();
 
-        self.inner.rename(id, new_parent, new_name);
+        self.inner.rename(id, new_parent, new_name)?;
 
-        self.update_time(&dirent.parent, timestamp, false, true, true);
-        self.update_time(new_parent, timestamp, false, true, true);
-        self.update_time(id, timestamp, false, false, true);
+        self.update_time(&dirent.parent, timestamp, false, true, true)?;
+        self.update_time(new_parent, timestamp, false, true, true)?;
+        self.update_time(id, timestamp, false, false, true)?;
+
+        Ok(())
     }
 
-    pub fn resize_file(&mut self, id: &str, new_size: u64) {
-        let dirent = self.inner.query_file(id).unwrap();
+    pub fn resize_file(&mut self, id: &str, new_size: u64) -> OperationResult<()> {
+        let dirent = self.inner.query_file(id)?.unwrap();
 
         let old_size = dirent.stat.size;
         let old_chunk_count = (old_size as usize + BLOB_SIZE - 1) / BLOB_SIZE;
         let new_chunk_count = (new_size as usize + BLOB_SIZE - 1) / BLOB_SIZE;
-        let chunks = self.inner.get_chunks(id);
+        let chunks = self.inner.get_chunks(id)?;
 
         // Adjust the chunks
         if new_chunk_count > old_chunk_count {
-            let zero_blob = self.inner.add_blob(&[]);
+            let zero_blob = self.inner.add_blob(&[])?;
             let iter = std::iter::repeat(&zero_blob)
                 .enumerate()
                 .skip(old_chunk_count)
                 .take(new_chunk_count - old_chunk_count);
-            self.inner.replace_chunks(id, iter);
+            self.inner.replace_chunks(id, iter)?;
         } else if new_chunk_count < old_chunk_count {
-            self.inner.truncate_chunks(id, new_chunk_count);
+            self.inner.truncate_chunks(id, new_chunk_count)?;
         }
 
         // Adjust the last chunk
@@ -210,15 +234,17 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         if last_chunk_size != 0 && new_size < old_size {
             let last_chunk_index = new_chunk_count - 1;
 
-            let mut last_chunk = self.inner.get_blob(&chunks[last_chunk_index]);
+            let mut last_chunk = self.inner.get_blob(&chunks[last_chunk_index])?;
             if last_chunk_size < last_chunk.len() {
                 last_chunk.resize(last_chunk_size, 0);
 
-                let last_chunk_blob = self.inner.add_blob(&last_chunk);
+                let last_chunk_blob = self.inner.add_blob(&last_chunk)?;
                 self.inner
-                    .replace_chunk(id, last_chunk_index, &last_chunk_blob);
+                    .replace_chunk(id, last_chunk_index, &last_chunk_blob)?;
             }
         }
+
+        Ok(())
     }
 
     pub fn set_attributes(
@@ -231,9 +257,9 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         size: Option<u64>,
         atim: Option<Timespec>,
         mut mtim: Option<Timespec>,
-    ) {
+    ) -> OperationResult<()> {
         if size.is_some() {
-            self.resize_file(id, size.unwrap());
+            self.resize_file(id, size.unwrap())?;
             mtim = Some(timestamp);
         }
 
@@ -244,12 +270,20 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         };
 
         self.inner
-            .set_attributes(id, mode, uid, gid, size, atim, mtim, ctim);
+            .set_attributes(id, mode, uid, gid, size, atim, mtim, ctim)?;
+
+        Ok(())
     }
 
-    pub fn write(&mut self, id: &str, timestamp: Timespec, offset: usize, data: &[u8]) {
-        let chunks = self.inner.get_chunks(id);
-        let mut blobs = self.inner.get_blobs(chunks.iter());
+    pub fn write(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        offset: usize,
+        data: &[u8],
+    ) -> OperationResult<()> {
+        let chunks = self.inner.get_chunks(id)?;
+        let mut blobs = self.inner.get_blobs(chunks.iter())?;
         let mut new_chunks = Vec::new();
         let mut data_offset: usize = 0;
         let first_chunk_id = offset / BLOB_SIZE;
@@ -266,7 +300,7 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
             chunk.as_mut_slice()[chunk_offset..chunk_offset + first_chunk_size]
                 .copy_from_slice(&data[..first_chunk_size]);
 
-            new_chunks.push(self.inner.add_blob(&chunk));
+            new_chunks.push(self.inner.add_blob(&chunk)?);
 
             data_offset += first_chunk_size;
         }
@@ -275,7 +309,7 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         while data_offset + BLOB_SIZE <= data.len() {
             new_chunks.push(
                 self.inner
-                    .add_blob(&data[data_offset..data_offset + BLOB_SIZE]),
+                    .add_blob(&data[data_offset..data_offset + BLOB_SIZE])?,
             );
 
             data_offset += BLOB_SIZE;
@@ -292,7 +326,7 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
 
             chunk.as_mut_slice()[..last_chunk_size].copy_from_slice(&data[data_offset..]);
 
-            new_chunks.push(self.inner.add_blob(&chunk));
+            new_chunks.push(self.inner.add_blob(&chunk)?);
         }
 
         // Update the store
@@ -302,11 +336,13 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
                 .iter()
                 .enumerate()
                 .map(|(i, value)| (i + first_chunk_id, value)),
-        );
-        let dirent = self.inner.query_file(id).unwrap();
+        )?;
+        let dirent = self.inner.query_file(id)?.unwrap();
         self.inner
-            .resize_file(id, max(dirent.stat.size, (offset + data.len()) as u64));
+            .resize_file(id, max(dirent.stat.size, (offset + data.len()) as u64))?;
 
-        self.update_time(id, timestamp, false, true, true);
+        self.update_time(id, timestamp, false, true, true)?;
+
+        Ok(())
     }
 }

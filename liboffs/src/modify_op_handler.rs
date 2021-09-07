@@ -12,28 +12,28 @@ pub trait OperationHandler {
         parent_id: &str,
         timestamp: Timespec,
         operation: &CreateFileOperation,
-    ) -> String;
+    ) -> OperationResult<String>;
 
     fn perform_create_symlink(
         &mut self,
         parent_id: &str,
         timestamp: Timespec,
         operation: &CreateSymlinkOperation,
-    ) -> String;
+    ) -> OperationResult<String>;
 
     fn perform_create_directory(
         &mut self,
         parent_id: &str,
         timestamp: Timespec,
         operation: &CreateDirectoryOperation,
-    ) -> String;
+    ) -> OperationResult<String>;
 
     fn perform_remove_file(
         &mut self,
         id: &str,
         timestamp: Timespec,
         operation: &RemoveFileOperation,
-    );
+    ) -> OperationResult<()>;
 
     fn perform_remove_directory(
         &mut self,
@@ -42,16 +42,26 @@ pub trait OperationHandler {
         operation: &RemoveDirectoryOperation,
     ) -> OperationResult<()>;
 
-    fn perform_rename(&mut self, id: &str, timestamp: Timespec, operation: &RenameOperation);
+    fn perform_rename(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        operation: &RenameOperation,
+    ) -> OperationResult<()>;
 
     fn perform_set_attributes(
         &mut self,
         id: &str,
         timestamp: Timespec,
         operation: &SetAttributesOperation,
-    );
+    ) -> OperationResult<()>;
 
-    fn perform_write(&mut self, id: &str, timestamp: Timespec, operation: &WriteOperation);
+    fn perform_write(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        operation: &WriteOperation,
+    ) -> OperationResult<()>;
 
     fn deferred_create_file(
         &mut self,
@@ -267,7 +277,7 @@ impl OperationApplier {
         if deferred {
             handler.deferred_create_file(id, timestamp, dirent_version, content_version, operation)
         } else {
-            Ok(handler.perform_create_file(id, timestamp, operation))
+            Ok(handler.perform_create_file(id, timestamp, operation)?)
         }
     }
 
@@ -289,7 +299,7 @@ impl OperationApplier {
                 operation,
             )
         } else {
-            Ok(handler.perform_create_symlink(id, timestamp, operation))
+            Ok(handler.perform_create_symlink(id, timestamp, operation)?)
         }
     }
 
@@ -311,7 +321,7 @@ impl OperationApplier {
                 operation,
             )
         } else {
-            Ok(handler.perform_create_directory(id, timestamp, operation))
+            Ok(handler.perform_create_directory(id, timestamp, operation)?)
         }
     }
 
@@ -327,7 +337,7 @@ impl OperationApplier {
         if deferred {
             handler.deferred_remove_file(id, timestamp, dirent_version, content_version, operation)
         } else {
-            Ok(handler.perform_remove_file(id, timestamp, operation))
+            Ok(handler.perform_remove_file(id, timestamp, operation)?)
         }
     }
 
@@ -365,7 +375,7 @@ impl OperationApplier {
         if deferred {
             handler.deferred_rename(id, timestamp, dirent_version, content_version, operation)
         } else {
-            Ok(handler.perform_rename(id, timestamp, operation))
+            Ok(handler.perform_rename(id, timestamp, operation)?)
         }
     }
 
@@ -387,7 +397,7 @@ impl OperationApplier {
                 operation,
             )
         } else {
-            Ok(handler.perform_set_attributes(id, timestamp, operation))
+            Ok(handler.perform_set_attributes(id, timestamp, operation)?)
         }
     }
 
@@ -403,7 +413,7 @@ impl OperationApplier {
         if deferred {
             handler.deferred_write(id, timestamp, dirent_version, content_version, operation)
         } else {
-            Ok(handler.perform_write(id, timestamp, operation))
+            Ok(handler.perform_write(id, timestamp, operation)?)
         }
     }
 }

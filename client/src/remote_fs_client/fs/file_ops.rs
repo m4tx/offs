@@ -37,7 +37,7 @@ impl OffsFilesystem {
         let operation = ModifyOpBuilder::make_write_op(&dirent, op.offset as i64, op.data);
 
         let mut dirent = self.perform_operation(operation).await?;
-        self.add_dirent(&mut dirent);
+        self.add_dirent(&mut dirent)?;
 
         Ok(())
     }
@@ -50,19 +50,19 @@ impl OffsFilesystem {
                 err_offline!();
             }
 
-            return Ok(self.store.inner.list_files(id));
+            return Ok(self.store.inner.list_files(id)?);
         }
 
         let mut items = self.client.list_files(id).await?;
 
         let transaction = self.store.inner.transaction();
         for dirent in &mut items {
-            self.add_dirent(dirent);
+            self.add_dirent(dirent)?;
         }
-        self.store.inner.update_retrieved_version(id);
+        self.store.inner.update_retrieved_version(id)?;
 
         let children_ids = items.iter().map(|x| &x.id);
-        self.store.inner.remove_remaining_files(id, children_ids);
+        self.store.inner.remove_remaining_files(id, children_ids)?;
 
         transaction.commit()?;
 
@@ -70,10 +70,10 @@ impl OffsFilesystem {
     }
 
     pub(super) async fn read(&mut self, id: &str, offset: i64, size: u32) -> Result<Vec<u8>> {
-        let missing_blobs = self.store.get_missing_blobs_for_read(id, offset, size);
+        let missing_blobs = self.store.get_missing_blobs_for_read(id, offset, size)?;
         self.retrieve_missing_blobs(missing_blobs).await?;
 
-        Ok(self.store.read(id, offset, size))
+        Ok(self.store.read(id, offset, size)?)
     }
 
     // Modifications
@@ -94,18 +94,18 @@ impl OffsFilesystem {
 
         let new_id = self.apply_operation(&operation)?;
 
-        let journal_entry_id = self.store.inner.add_journal_entry(&id, &serialized_op);
+        let journal_entry_id = self.store.inner.add_journal_entry(&id, &serialized_op)?;
         let dirent = if self.is_offline() {
             self.query_file(&new_id)?
         } else {
             let mut dirent = self.client.request_apply_operation(operation).await?;
-            self.store.inner.remove_journal_item(journal_entry_id);
+            self.store.inner.remove_journal_item(journal_entry_id)?;
 
             if !dirent.id.is_empty() {
                 if new_id != dirent.id {
-                    self.store.inner.change_id(&new_id, &dirent.id);
+                    self.store.inner.change_id(&new_id, &dirent.id)?;
                 }
-                self.add_dirent(&mut dirent);
+                self.add_dirent(&mut dirent)?;
             }
 
             dirent
@@ -130,7 +130,7 @@ impl OffsFilesystem {
             ModifyOpBuilder::make_create_file_op(&parent_dirent, name, file_type, mode, dev);
 
         let mut dirent = self.perform_operation(operation).await?;
-        self.add_dirent(&mut dirent);
+        self.add_dirent(&mut dirent)?;
 
         Ok(dirent)
     }
@@ -145,7 +145,7 @@ impl OffsFilesystem {
         let operation = ModifyOpBuilder::make_create_symlink_op(&parent_dirent, name, link);
 
         let mut dirent = self.perform_operation(operation).await?;
-        self.add_dirent(&mut dirent);
+        self.add_dirent(&mut dirent)?;
 
         Ok(dirent)
     }
@@ -160,7 +160,7 @@ impl OffsFilesystem {
         let operation = ModifyOpBuilder::make_create_directory_op(&parent_dirent, name, mode);
 
         let mut dirent = self.perform_operation(operation).await?;
-        self.add_dirent(&mut dirent);
+        self.add_dirent(&mut dirent)?;
 
         Ok(dirent)
     }
@@ -195,7 +195,7 @@ impl OffsFilesystem {
         let operation = ModifyOpBuilder::make_rename_op(&dirent, new_parent, new_name);
 
         let mut dirent = self.perform_operation(operation).await?;
-        self.add_dirent(&mut dirent);
+        self.add_dirent(&mut dirent)?;
 
         Ok(dirent)
     }
@@ -215,7 +215,7 @@ impl OffsFilesystem {
             ModifyOpBuilder::make_set_attributes_op(&dirent, mode, uid, gid, size, atime, mtime);
 
         let mut dirent = self.perform_operation(operation).await?;
-        self.add_dirent(&mut dirent);
+        self.add_dirent(&mut dirent)?;
 
         Ok(dirent)
     }

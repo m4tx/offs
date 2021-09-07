@@ -53,7 +53,7 @@ impl OffsFilesystem {
         };
 
         // Request the root attributes
-        fs.store.inner.create_default_root_directory();
+        fs.store.inner.create_default_root_directory()?;
         fs.update_dirent(ROOT_ID, true).await?;
 
         if !fs.is_offline() {
@@ -66,19 +66,20 @@ impl OffsFilesystem {
     pub(super) fn query_file(&self, id: &str) -> Result<DirEntity> {
         self.store
             .inner
-            .query_file(id)
+            .query_file(id)?
             .ok_or(RemoteFsError::new(RemoteFsErrorKind::NoEntry))
     }
 
     pub(super) fn query_file_by_name(&self, parent_id: &str, name: &str) -> Result<DirEntity> {
         self.store
             .inner
-            .query_file_by_name(parent_id, name)
+            .query_file_by_name(parent_id, name)?
             .ok_or(RemoteFsError::new(RemoteFsErrorKind::NoEntry))
     }
 
-    pub(super) fn add_dirent(&mut self, dirent: &mut DirEntity) {
-        self.store.inner.add_or_replace_item(&dirent);
+    pub(super) fn add_dirent(&mut self, dirent: &mut DirEntity) -> Result<()> {
+        self.store.inner.add_or_replace_item(&dirent)?;
+        Ok(())
     }
 
     pub(super) async fn update_dirent(
@@ -99,7 +100,7 @@ impl OffsFilesystem {
 
             let transaction = self.store.inner.transaction();
             for (_, blob) in &blobs {
-                self.store.inner.add_blob(blob);
+                self.store.inner.add_blob(blob)?;
             }
             transaction.commit()?;
         };
@@ -109,7 +110,7 @@ impl OffsFilesystem {
 
     pub(super) async fn update_chunks(&mut self, id: &str) -> Result<()> {
         if self.is_offline() {
-            let dirent = self.store.inner.query_file(id).unwrap();
+            let dirent = self.store.inner.query_file(id)?.unwrap();
             if dirent.stat.size != 0 && !dirent.is_up_to_date() {
                 err_offline!();
             }
@@ -120,8 +121,8 @@ impl OffsFilesystem {
         let chunks = self.client.get_chunks(id).await?;
         self.store
             .inner
-            .replace_chunks(id, chunks.iter().enumerate());
-        self.store.inner.update_retrieved_version(id);
+            .replace_chunks(id, chunks.iter().enumerate())?;
+        self.store.inner.update_retrieved_version(id)?;
 
         Ok(())
     }

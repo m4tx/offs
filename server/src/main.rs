@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .get_matches();
 
-    let store = Store::new_server(matches.value_of("store").unwrap());
+    let store = Store::new_server(matches.value_of("store").unwrap()).unwrap();
 
     let address_str = matches.value_of("ADDRESS").unwrap();
     let address = address_str.to_socket_addrs().unwrap().next().unwrap();

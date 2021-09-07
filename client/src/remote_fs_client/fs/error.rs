@@ -59,6 +59,7 @@ impl From<OperationError> for RemoteFsError {
             }
             OperationErrorType::ConflictedFile => Self::new(RemoteFsErrorKind::InvalidValue),
             OperationErrorType::InvalidContentVersion => Self::new(RemoteFsErrorKind::InvalidValue),
+            OperationErrorType::BlobDoesNotExist => Self::new(RemoteFsErrorKind::InvalidValue),
         }
     }
 }

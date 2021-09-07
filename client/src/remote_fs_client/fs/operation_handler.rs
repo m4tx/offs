@@ -15,15 +15,15 @@ impl OperationHandler for OffsFilesystem {
         parent_id: &str,
         timestamp: Timespec,
         operation: &CreateFileOperation,
-    ) -> String {
-        self.store.create_file(
+    ) -> OperationResult<String> {
+        Ok(self.store.create_file(
             parent_id,
             timestamp,
             &operation.name,
             operation.file_type,
             operation.perm,
             operation.dev,
-        )
+        )?)
     }
 
     fn perform_create_symlink(
@@ -31,9 +31,10 @@ impl OperationHandler for OffsFilesystem {
         parent_id: &str,
         timestamp: Timespec,
         operation: &CreateSymlinkOperation,
-    ) -> String {
-        self.store
-            .create_symlink(parent_id, timestamp, &operation.name, &operation.link)
+    ) -> OperationResult<String> {
+        Ok(self
+            .store
+            .create_symlink(parent_id, timestamp, &operation.name, &operation.link)?)
     }
 
     fn perform_create_directory(
@@ -41,9 +42,10 @@ impl OperationHandler for OffsFilesystem {
         parent_id: &str,
         timestamp: Timespec,
         operation: &CreateDirectoryOperation,
-    ) -> String {
-        self.store
-            .create_directory(parent_id, timestamp, &operation.name, operation.perm)
+    ) -> OperationResult<String> {
+        Ok(self
+            .store
+            .create_directory(parent_id, timestamp, &operation.name, operation.perm)?)
     }
 
     fn perform_remove_file(
@@ -51,8 +53,9 @@ impl OperationHandler for OffsFilesystem {
         id: &str,
         timestamp: Timespec,
         _operation: &RemoveFileOperation,
-    ) {
-        self.store.remove_file(id, timestamp);
+    ) -> OperationResult<()> {
+        self.store.remove_file(id, timestamp)?;
+        Ok(())
     }
 
     fn perform_remove_directory(
@@ -65,9 +68,15 @@ impl OperationHandler for OffsFilesystem {
         Ok(())
     }
 
-    fn perform_rename(&mut self, id: &str, timestamp: Timespec, operation: &RenameOperation) {
+    fn perform_rename(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        operation: &RenameOperation,
+    ) -> OperationResult<()> {
         self.store
-            .rename(id, timestamp, &operation.new_parent, &operation.new_name);
+            .rename(id, timestamp, &operation.new_parent, &operation.new_name)?;
+        Ok(())
     }
 
     fn perform_set_attributes(
@@ -75,7 +84,7 @@ impl OperationHandler for OffsFilesystem {
         id: &str,
         timestamp: Timespec,
         operation: &SetAttributesOperation,
-    ) {
+    ) -> OperationResult<()> {
         self.store.set_attributes(
             id,
             timestamp,
@@ -85,11 +94,18 @@ impl OperationHandler for OffsFilesystem {
             operation.size,
             operation.atim,
             operation.mtim,
-        );
+        )?;
+        Ok(())
     }
 
-    fn perform_write(&mut self, id: &str, timestamp: Timespec, operation: &ModifyOpWriteOperation) {
+    fn perform_write(
+        &mut self,
+        id: &str,
+        timestamp: Timespec,
+        operation: &ModifyOpWriteOperation,
+    ) -> OperationResult<()> {
         self.store
-            .write(id, timestamp, operation.offset as usize, &operation.data);
+            .write(id, timestamp, operation.offset as usize, &operation.data)?;
+        Ok(())
     }
 }

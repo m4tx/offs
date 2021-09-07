@@ -42,7 +42,7 @@ impl RemoteFs for RemoteFsServerImpl {
             .await
             .store
             .inner
-            .list_files(&request.into_inner().id)
+            .list_files(&request.into_inner().id)?
             .into_iter()
             .map(|x| DirEntity::from(x));
 
@@ -65,7 +65,7 @@ impl RemoteFs for RemoteFsServerImpl {
             .await
             .store
             .inner
-            .get_chunks(&request.into_inner().id);
+            .get_chunks(&request.into_inner().id)?;
 
         let resp = ListChunksResult {
             blob_id: chunks.into(),
@@ -87,7 +87,7 @@ impl RemoteFs for RemoteFsServerImpl {
             .await
             .store
             .inner
-            .get_blobs(request.into_inner().id)
+            .get_blobs(request.into_inner().id)?
             .into_iter()
             .map(|(k, v)| Blob { id: k, content: v });
 
@@ -109,14 +109,14 @@ impl RemoteFs for RemoteFsServerImpl {
             let transaction = fs.store.inner.transaction();
 
             let operation: offs::modify_op::ModifyOperation = request.into_inner().into();
-            let dir_entity = fs.store.inner.query_file(&operation.id);
+            let dir_entity = fs.store.inner.query_file(&operation.id)?;
 
             let new_id = OperationApplier::apply_operation(fs.deref_mut(), &operation)?;
 
             let dir_entity = match operation.operation {
                 ModifyOperationContent::RemoveFileOperation(_)
                 | ModifyOperationContent::RemoveDirectoryOperation(_) => dir_entity.unwrap(),
-                _ => fs.store.inner.query_file(&new_id).unwrap(),
+                _ => fs.store.inner.query_file(&new_id)?.unwrap(),
             };
 
             transaction.commit().unwrap();
@@ -164,7 +164,7 @@ impl RemoteFs for RemoteFsServerImpl {
             .await
             .store
             .inner
-            .get_missing_blobs(request.into_inner().id);
+            .get_missing_blobs(request.into_inner().id)?;
 
         let resp = GetMissingBlobsResult {
             blob_id: chunks.into(),

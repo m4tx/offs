@@ -17,6 +17,7 @@ pub enum OperationErrorType {
     DirectoryNotEmpty,
     ConflictedFile,
     InvalidContentVersion,
+    BlobDoesNotExist,
 }
 
 impl Into<Code> for OperationErrorType {
@@ -26,6 +27,7 @@ impl Into<Code> for OperationErrorType {
             OperationErrorType::DirectoryNotEmpty => Code::FailedPrecondition,
             OperationErrorType::ConflictedFile => Code::AlreadyExists,
             OperationErrorType::InvalidContentVersion => Code::FailedPrecondition,
+            OperationErrorType::BlobDoesNotExist => Code::InvalidArgument,
         }
     }
 }
@@ -77,6 +79,14 @@ impl OperationError {
             details: Default::default(),
         }
     }
+
+    pub fn blob_does_not_exist(id: &str) -> Self {
+        Self {
+            error_type: OperationErrorType::BlobDoesNotExist,
+            message: format!("Blob {} does not exist", id),
+            details: Default::default(),
+        }
+    }
 }
 
 impl Display for OperationError {
@@ -88,6 +98,8 @@ impl Display for OperationError {
         )
     }
 }
+
+impl std::error::Error for OperationError {}
 
 impl From<rusqlite::Error> for OperationError {
     fn from(error: Error) -> Self {

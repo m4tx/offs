@@ -31,12 +31,12 @@ impl OffsFilesystem {
         for (i, id) in assigned_ids.iter().enumerate() {
             self.store
                 .inner
-                .change_id(&LocalTempIdGenerator::get_nth_id(i), id);
+                .change_id(&LocalTempIdGenerator::get_nth_id(i), id)?;
         }
         for mut dirent in dir_entities {
-            self.add_dirent(&mut dirent);
+            self.add_dirent(&mut dirent)?;
         }
-        self.store.inner.clear_journal();
+        self.store.inner.clear_journal()?;
 
         transaction.commit().unwrap();
 
@@ -58,11 +58,11 @@ impl OffsFilesystem {
     }
 
     async fn try_prepare_and_send_journal(&mut self) -> Result<Option<JournalApplyData>> {
-        let ops = self.prepare_ops_to_send();
+        let ops = self.prepare_ops_to_send()?;
         if ops.is_empty() {
             return Ok(Some(Default::default()));
         }
-        let chunks = self.prepare_chunks_to_send();
+        let chunks = self.prepare_chunks_to_send()?;
         let blobs = self.prepare_blobs_to_send().await?;
 
         let result = self.client.apply_journal(ops, chunks, blobs).await?;
@@ -76,7 +76,7 @@ impl OffsFilesystem {
                 panic!("The file operation journal is corrupted");
             }
             JournalApplyError::ConflictingFiles(ids) => {
-                self.recreate_conflicting_files(ids);
+                self.recreate_conflicting_files(ids)?;
             }
             JournalApplyError::MissingBlobs(_) => {
                 // Do nothing, we will re-query the missing blobs in the next iteration
@@ -86,60 +86,66 @@ impl OffsFilesystem {
         Ok(None)
     }
 
-    fn prepare_ops_to_send(&mut self) -> Vec<ModifyOperation> {
-        self.store
+    fn prepare_ops_to_send(&mut self) -> Result<Vec<ModifyOperation>> {
+        Ok(self
+            .store
             .inner
-            .get_journal()
+            .get_journal()?
             .into_iter()
             .map(|x| {
                 let parsed = proto_types::ModifyOperation::decode(x.as_slice()).unwrap();
                 parsed.into()
             })
-            .collect_vec()
+            .collect_vec())
     }
 
-    fn prepare_chunks_to_send(&mut self) -> Vec<Vec<String>> {
-        self.store
+    fn prepare_chunks_to_send(&mut self) -> Result<Vec<Vec<String>>> {
+        Ok(self
+            .store
             .inner
             .get_temp_file_ids()
-            .map(|id| self.store.inner.get_chunks(&id))
-            .collect()
+            .map(|id| self.store.inner.get_chunks(&id).unwrap())
+            .collect())
     }
 
     async fn prepare_blobs_to_send(&mut self) -> Result<Vec<Vec<u8>>> {
-        let blobs_used = self.store.inner.get_temp_chunks();
+        let blobs_used = self.store.inner.get_temp_chunks()?;
         let blob_ids_to_send = self.client.get_server_missing_blobs(blobs_used).await?;
-        let blobs_to_send = self.store.inner.get_blobs(&blob_ids_to_send);
+        let blobs_to_send = self.store.inner.get_blobs(&blob_ids_to_send)?;
         Ok(blobs_to_send.into_iter().map(|(_, v)| v).collect_vec())
     }
 
-    fn recreate_conflicting_files(&mut self, ids: Vec<String>) {
+    fn recreate_conflicting_files(&mut self, ids: Vec<String>) -> Result<()> {
         let transaction = self.store.inner.transaction();
 
         for id in ids {
-            self.recreate_conflicting_file(&id);
+            self.recreate_conflicting_file(&id)?;
         }
 
         transaction.commit().unwrap();
+
+        Ok(())
     }
 
-    fn recreate_conflicting_file(&mut self, id: &String) {
-        self.store.inner.remove_file_from_journal(&id);
-        let new_id = self.store.inner.assign_temp_id(&id);
+    fn recreate_conflicting_file(&mut self, id: &String) -> Result<()> {
+        self.store.inner.remove_file_from_journal(&id)?;
+        let new_id = self.store.inner.assign_temp_id(&id)?;
 
-        let dirent = self.store.inner.query_file(&new_id).unwrap();
-        let parent_dirent = self.store.inner.query_file(&dirent.parent).unwrap();
+        let dirent = self.store.inner.query_file(&new_id)?.unwrap();
+        let parent_dirent = self.store.inner.query_file(&dirent.parent)?.unwrap();
 
         let recreate_file_op = ModifyOpBuilder::make_recreate_file_op(&parent_dirent, &dirent);
         let recreate_file_op_proto: proto_types::ModifyOperation = recreate_file_op.into();
         self.store
             .inner
-            .add_journal_entry(&dirent.parent, &recreate_file_op_proto.encode_to_vec());
+            .add_journal_entry(&dirent.parent, &recreate_file_op_proto.encode_to_vec())?;
 
         let reset_attributes_op = ModifyOpBuilder::make_reset_attributes_op(&dirent);
         let reset_attributes_op_proto: proto_types::ModifyOperation = reset_attributes_op.into();
         self.store
             .inner
-            .add_journal_entry(&new_id, &reset_attributes_op_proto.encode_to_vec());
+            .add_journal_entry(&new_id, &reset_attributes_op_proto.encode_to_vec())?;
+
+        Ok(())
     }
 }

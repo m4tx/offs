@@ -73,7 +73,7 @@ fn main() {
         .init()
         .unwrap();
 
-    let store = Store::new_client(matches.value_of("cache").unwrap());
+    let store = Store::new_client(matches.value_of("cache").unwrap()).unwrap();
 
     let address_str = matches.value_of("ADDRESS").unwrap();
     let address = address_str.to_socket_addrs().unwrap().next().unwrap();
