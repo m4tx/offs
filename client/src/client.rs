@@ -36,7 +36,7 @@ pub fn run_client(
                 offline_mode_val_cloned,
                 should_flush_journal_cloned,
             )
-            .unwrap();
+            .expect("Could not run D-Bus server");
         });
     }
 
@@ -48,7 +48,7 @@ pub fn run_client(
     let fs = rt.block_on(async move {
         OffsFilesystem::new(address, offline_mode_val, should_flush_journal, store)
             .await
-            .unwrap()
+            .expect("Could not create Filesystem instance")
     });
     let fs = Arc::new(RwLock::new(fs));
 
@@ -60,8 +60,8 @@ pub fn run_client(
         &mount_point,
         Default::default(),
     )
-    .unwrap();
-    let _background_session = session.spawn().unwrap();
+    .expect("Could not run FUSE session");
+    let _background_session = session.spawn().expect("Could not run FUSE session");
 
     let (lock, cvar) = &*thread_lock;
     let mut interrupted = lock.lock().unwrap();

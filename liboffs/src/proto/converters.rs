@@ -112,9 +112,18 @@ impl From<proto_types::Stat> for crate_types::FileStat {
             gid: value.gid,
             size: value.size,
             blocks: value.blocks,
-            atim: value.atim.unwrap().into(),
-            mtim: value.mtim.unwrap().into(),
-            ctim: value.ctim.unwrap().into(),
+            atim: value
+                .atim
+                .expect("atim missing in the proto message")
+                .into(),
+            mtim: value
+                .mtim
+                .expect("mtim missing in the proto message")
+                .into(),
+            ctim: value
+                .ctim
+                .expect("ctim missing in the proto message")
+                .into(),
         }
     }
 }
@@ -122,7 +131,7 @@ impl From<proto_types::Stat> for crate_types::FileStat {
 // DirEntity
 impl From<crate_types::DirEntity> for proto_types::DirEntity {
     fn from(value: crate_types::DirEntity) -> Self {
-        proto_types::DirEntity {
+        Self {
             id: value.id,
             parent: value.parent,
             name: value.name,
@@ -144,7 +153,10 @@ impl From<proto_types::DirEntity> for crate_types::DirEntity {
             content_version: value.content_version,
             retrieved_version: 0,
 
-            stat: value.stat.unwrap().into(),
+            stat: value
+                .stat
+                .expect("stat missing in the proto message")
+                .into(),
         }
     }
 }

@@ -33,7 +33,7 @@ impl OffsFilesystem {
     }
 
     async fn do_single_write(&mut self, id: &str, op: WriteOperation) -> Result<()> {
-        let dirent = self.query_file(id)?;
+        let dirent = self.store.query_file(id)?;
         let operation = ModifyOpBuilder::make_write_op(&dirent, op.offset as i64, op.data);
 
         let mut dirent = self.perform_operation(operation).await?;
@@ -45,7 +45,7 @@ impl OffsFilesystem {
     // Read
     pub(super) async fn list_files(&mut self, id: &str) -> Result<Vec<DirEntity>> {
         if self.is_offline() {
-            let dirent = self.query_file(id)?;
+            let dirent = self.store.query_file(id)?;
             if !dirent.is_retrieved() {
                 err_offline!();
             }
@@ -96,7 +96,7 @@ impl OffsFilesystem {
 
         let journal_entry_id = self.store.inner.add_journal_entry(&id, &serialized_op)?;
         let dirent = if self.is_offline() {
-            self.query_file(&new_id)?
+            self.store.query_file(&new_id)?
         } else {
             let mut dirent = self.client.request_apply_operation(operation).await?;
             self.store.inner.remove_journal_item(journal_entry_id)?;
@@ -125,7 +125,7 @@ impl OffsFilesystem {
         mode: FileMode,
         dev: FileDev,
     ) -> Result<DirEntity> {
-        let parent_dirent = self.query_file(parent_id)?;
+        let parent_dirent = self.store.query_file(parent_id)?;
         let operation =
             ModifyOpBuilder::make_create_file_op(&parent_dirent, name, file_type, mode, dev);
 
@@ -141,7 +141,7 @@ impl OffsFilesystem {
         name: &str,
         link: &str,
     ) -> Result<DirEntity> {
-        let parent_dirent = self.query_file(parent_id)?;
+        let parent_dirent = self.store.query_file(parent_id)?;
         let operation = ModifyOpBuilder::make_create_symlink_op(&parent_dirent, name, link);
 
         let mut dirent = self.perform_operation(operation).await?;
@@ -156,7 +156,7 @@ impl OffsFilesystem {
         name: &str,
         mode: FileMode,
     ) -> Result<DirEntity> {
-        let parent_dirent = self.query_file(parent_id)?;
+        let parent_dirent = self.store.query_file(parent_id)?;
         let operation = ModifyOpBuilder::make_create_directory_op(&parent_dirent, name, mode);
 
         let mut dirent = self.perform_operation(operation).await?;
@@ -167,7 +167,7 @@ impl OffsFilesystem {
 
     // Remove
     pub(super) async fn remove_file(&mut self, id: &str) -> Result<()> {
-        let dirent = self.query_file(id)?;
+        let dirent = self.store.query_file(id)?;
         let operation = ModifyOpBuilder::make_remove_file_op(&dirent);
 
         self.perform_operation(operation).await?;
@@ -176,7 +176,7 @@ impl OffsFilesystem {
     }
 
     pub(super) async fn remove_directory(&mut self, id: &str) -> Result<()> {
-        let dirent = self.query_file(id)?;
+        let dirent = self.store.query_file(id)?;
         let operation = ModifyOpBuilder::make_remove_directory_op(&dirent);
 
         self.perform_operation(operation).await?;
@@ -191,7 +191,7 @@ impl OffsFilesystem {
         new_parent: &str,
         new_name: &str,
     ) -> Result<DirEntity> {
-        let dirent = self.query_file(id)?;
+        let dirent = self.store.query_file(id)?;
         let operation = ModifyOpBuilder::make_rename_op(&dirent, new_parent, new_name);
 
         let mut dirent = self.perform_operation(operation).await?;
@@ -210,7 +210,7 @@ impl OffsFilesystem {
         atime: Option<Timespec>,
         mtime: Option<Timespec>,
     ) -> Result<DirEntity> {
-        let dirent = self.query_file(id)?;
+        let dirent = self.store.query_file(id)?;
         let operation =
             ModifyOpBuilder::make_set_attributes_op(&dirent, mode, uid, gid, size, atime, mtime);
 

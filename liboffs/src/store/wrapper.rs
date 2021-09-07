@@ -2,9 +2,9 @@ use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::iter;
 
-use crate::errors::OperationResult;
+use crate::errors::{OperationError, OperationResult};
 use crate::store::id_generator::IdGenerator;
-use crate::store::{FileDev, FileMode, FileType, Store};
+use crate::store::{DirEntity, FileDev, FileMode, FileType, Store};
 use crate::timespec::Timespec;
 use crate::BLOB_SIZE;
 
@@ -19,6 +19,12 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
     }
 
     // Read
+    pub fn query_file(&self, id: &str) -> OperationResult<DirEntity> {
+        self.inner
+            .query_file(id)?
+            .ok_or(OperationError::file_does_not_exist(&format!("id={}", id)))
+    }
+
     fn get_start_end_chunks(offset: i64, size: u32, chunk_num: usize) -> (usize, usize) {
         const IBLOB_SIZE: i64 = BLOB_SIZE as i64;
 
@@ -170,7 +176,7 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
 
     // Remove
     pub fn remove_file(&mut self, id: &str, timestamp: Timespec) -> OperationResult<()> {
-        let dirent = self.inner.query_file(id)?.unwrap();
+        let dirent = self.query_file(id)?;
 
         self.inner.remove_file(id)?;
 
@@ -180,7 +186,7 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
     }
 
     pub fn remove_directory(&mut self, id: &str, timestamp: Timespec) -> OperationResult<()> {
-        let dirent = self.inner.query_file(id)?.unwrap();
+        let dirent = self.query_file(id)?;
 
         self.inner.remove_directory(id)?;
 
@@ -197,7 +203,7 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         new_parent: &str,
         new_name: &str,
     ) -> OperationResult<()> {
-        let dirent = self.inner.query_file(id)?.unwrap();
+        let dirent = self.query_file(id)?;
 
         self.inner.rename(id, new_parent, new_name)?;
 
@@ -209,7 +215,7 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
     }
 
     pub fn resize_file(&mut self, id: &str, new_size: u64) -> OperationResult<()> {
-        let dirent = self.inner.query_file(id)?.unwrap();
+        let dirent = self.query_file(id)?;
 
         let old_size = dirent.stat.size;
         let old_chunk_count = (old_size as usize + BLOB_SIZE - 1) / BLOB_SIZE;
@@ -258,8 +264,8 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         atim: Option<Timespec>,
         mut mtim: Option<Timespec>,
     ) -> OperationResult<()> {
-        if size.is_some() {
-            self.resize_file(id, size.unwrap())?;
+        if let Some(size_val) = size {
+            self.resize_file(id, size_val)?;
             mtim = Some(timestamp);
         }
 
@@ -337,7 +343,7 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
                 .enumerate()
                 .map(|(i, value)| (i + first_chunk_id, value)),
         )?;
-        let dirent = self.inner.query_file(id)?.unwrap();
+        let dirent = self.query_file(id)?;
         self.inner
             .resize_file(id, max(dirent.stat.size, (offset + data.len()) as u64))?;
 

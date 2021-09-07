@@ -36,6 +36,8 @@ pub struct LocalTempIdGenerator {
     pub next_id: Arc<AtomicUsize>,
 }
 
+const LOCAL_PREFIX: &str = "temp-";
+
 impl LocalTempIdGenerator {
     pub fn new() -> Self {
         Self {
@@ -44,17 +46,19 @@ impl LocalTempIdGenerator {
     }
 
     pub fn get_nth_id(n: usize) -> String {
-        format!("temp-{:020}", n)
+        format!("{}{:020}", LOCAL_PREFIX, n)
     }
 
     pub fn get_n(id: &str) -> usize {
         debug_assert!(Self::is_local_id(id));
 
-        id[5..].parse().unwrap()
+        id[LOCAL_PREFIX.len()..]
+            .parse()
+            .expect(&format!("Invalid temporary ID assigned: {}", id))
     }
 
     pub fn is_local_id(id: &str) -> bool {
-        id.starts_with("temp-")
+        id.starts_with(LOCAL_PREFIX)
     }
 }
 

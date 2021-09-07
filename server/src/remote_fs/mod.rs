@@ -128,7 +128,7 @@ impl RemoteFs {
         id: &str,
         timestamp: Timespec,
     ) -> OperationResult<String> {
-        let dirent = self.store.inner.query_file(id)?.unwrap();
+        let dirent = self.query_file(id)?;
 
         Ok(self.get_name_if_conflicts(&dirent.parent, &dirent.name, timestamp)?)
     }
@@ -238,7 +238,7 @@ impl RemoteFs {
     }
 
     fn remove_file(&mut self, id: &str, timestamp: Timespec) -> OperationResult<()> {
-        let dirent = self.store.inner.query_file(id)?.unwrap();
+        let dirent = self.query_file(id)?;
         self.store.inner.increment_content_version(&dirent.parent)?;
 
         self.store.remove_file(id, timestamp)?;
@@ -247,7 +247,7 @@ impl RemoteFs {
     }
 
     fn remove_directory(&mut self, id: &str, timestamp: Timespec) -> OperationResult<()> {
-        let dirent = self.store.inner.query_file(id)?.unwrap();
+        let dirent = self.query_file(id)?;
         self.store.inner.increment_content_version(&dirent.parent)?;
 
         if self.store.inner.any_child_exists(id)? {
@@ -265,7 +265,7 @@ impl RemoteFs {
         new_parent: &str,
         new_name: &str,
     ) -> OperationResult<()> {
-        let dirent = self.store.inner.query_file(id)?.unwrap();
+        let dirent = self.query_file(id)?;
         self.store.inner.increment_content_version(&dirent.parent)?;
         self.store.inner.increment_content_version(&new_parent)?;
         self.store.inner.increment_dirent_version(id)?;
@@ -507,7 +507,7 @@ impl OperationHandler for RemoteFs {
         let mut size = operation.size;
 
         if size.is_some() {
-            let dirent = self.store.inner.query_file(id)?.unwrap();
+            let dirent = self.query_file(id)?;
 
             if dirent.stat.has_size() {
                 check_content_version!(id, dirent, content_version);
@@ -539,7 +539,7 @@ impl OperationHandler for RemoteFs {
         operation: &WriteOperation,
     ) -> OperationResult<()> {
         {
-            let dirent = self.store.inner.query_file(id)?.unwrap();
+            let dirent = self.query_file(id)?;
             check_content_version!(id, dirent, content_version);
         }
 

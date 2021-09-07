@@ -116,7 +116,7 @@ impl RemoteFs for RemoteFsServerImpl {
             let dir_entity = match operation.operation {
                 ModifyOperationContent::RemoveFileOperation(_)
                 | ModifyOperationContent::RemoveDirectoryOperation(_) => dir_entity.unwrap(),
-                _ => fs.store.inner.query_file(&new_id)?.unwrap(),
+                _ => fs.query_file(&new_id)?,
             };
 
             transaction.commit().unwrap();

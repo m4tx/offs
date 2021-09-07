@@ -200,7 +200,7 @@ impl Filesystem for FuseOffsFilesystem {
             let id = try_fs!(fuse_helper.lock().await.get_id_by_inode(ino), reply);
             let fs = fs.read().await;
 
-            let item = try_fs!(fs.query_file(&id), reply);
+            let item = try_fs!(fs.store.query_file(&id), reply);
 
             let rv = fuse_helper.lock().await.get_fuse_stat(&item);
             debug!("Response: {:?}", rv);

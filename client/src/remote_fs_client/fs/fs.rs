@@ -63,13 +63,6 @@ impl OffsFilesystem {
         Ok(fs)
     }
 
-    pub(super) fn query_file(&self, id: &str) -> Result<DirEntity> {
-        self.store
-            .inner
-            .query_file(id)?
-            .ok_or(OperationError::file_does_not_exist(&format!("id={}", id)))
-    }
-
     pub(super) fn query_file_by_name(&self, parent_id: &str, name: &str) -> Result<DirEntity> {
         self.store.inner.query_file_by_name(parent_id, name)?.ok_or(
             OperationError::file_does_not_exist(&format!("parent={}, name={}", parent_id, name)),
@@ -109,7 +102,7 @@ impl OffsFilesystem {
 
     pub(super) async fn update_chunks(&mut self, id: &str) -> Result<()> {
         if self.is_offline() {
-            let dirent = self.store.inner.query_file(id)?.unwrap();
+            let dirent = self.store.query_file(id)?;
             if dirent.stat.size != 0 && !dirent.is_up_to_date() {
                 err_offline!();
             }

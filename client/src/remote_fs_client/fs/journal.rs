@@ -67,8 +67,8 @@ impl OffsFilesystem {
 
         let result = self.client.apply_journal(ops, chunks, blobs).await?;
 
-        if result.is_ok() {
-            return Ok(Some(result.ok().unwrap()));
+        if let Ok(result_ok) = result {
+            return Ok(Some(result_ok));
         }
 
         match result.err().unwrap() {
@@ -131,8 +131,8 @@ impl OffsFilesystem {
         self.store.inner.remove_file_from_journal(&id)?;
         let new_id = self.store.inner.assign_temp_id(&id)?;
 
-        let dirent = self.store.inner.query_file(&new_id)?.unwrap();
-        let parent_dirent = self.store.inner.query_file(&dirent.parent)?.unwrap();
+        let dirent = self.store.query_file(&new_id)?;
+        let parent_dirent = self.store.query_file(&dirent.parent)?;
 
         let recreate_file_op = ModifyOpBuilder::make_recreate_file_op(&parent_dirent, &dirent);
         let recreate_file_op_proto: proto_types::ModifyOperation = recreate_file_op.into();
