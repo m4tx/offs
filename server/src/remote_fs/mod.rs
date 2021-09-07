@@ -54,13 +54,12 @@ impl RemoteFs {
         let (assigned_ids, processed_ids) = self.apply_journal(op_list)?;
         let dir_entities = processed_ids
             .iter()
-            .filter_map(|id| self.store.inner.query_file(id).unwrap())
+            .filter_map(|id| self.store.try_query_file(id).unwrap())
             .collect();
 
-        self.store.inner.add_blobs(blobs).unwrap();
+        self.store.add_blobs(blobs).unwrap();
         for (id, file_chunks) in assigned_ids.iter().zip(chunks.into_iter()) {
             self.store
-                .inner
                 .replace_chunks(id, file_chunks.into_iter().enumerate())
                 .unwrap();
         }
@@ -128,7 +127,7 @@ impl RemoteFs {
         id: &str,
         timestamp: Timespec,
     ) -> OperationResult<String> {
-        let dirent = self.query_file(id)?;
+        let dirent = self.store.query_file(id)?;
 
         Ok(self.get_name_if_conflicts(&dirent.parent, &dirent.name, timestamp)?)
     }
@@ -139,7 +138,7 @@ impl RemoteFs {
         name: &str,
         timestamp: Timespec,
     ) -> OperationResult<String> {
-        let result = if self.store.inner.file_exists_by_name(parent_id, name)? {
+        let result = if self.store.file_exists_by_name(parent_id, name)? {
             self.get_conflicted_name(parent_id, name, timestamp)?
         } else {
             name.to_owned()
@@ -165,7 +164,7 @@ impl RemoteFs {
         let date_str = datetime.format("%Y-%m-%d").to_string();
 
         let new_name = format!("{} (Conflicted copy {}){}", name, date_str, ext);
-        if !self.store.inner.file_exists_by_name(parent_id, &new_name)? {
+        if !self.store.file_exists_by_name(parent_id, &new_name)? {
             return Ok(new_name);
         }
 
@@ -175,7 +174,7 @@ impl RemoteFs {
             "{} (Conflicted copy {} {}){}",
             name, date_str, time_str, ext
         );
-        if !self.store.inner.file_exists_by_name(parent_id, &new_name)? {
+        if !self.store.file_exists_by_name(parent_id, &new_name)? {
             return Ok(new_name);
         }
 
@@ -184,7 +183,7 @@ impl RemoteFs {
                 "{} (Conflicted copy {} {}) ({}) {}",
                 name, date_str, time_str, i, ext
             );
-            if !self.store.inner.file_exists_by_name(parent_id, &new_name)? {
+            if !self.store.file_exists_by_name(parent_id, &new_name)? {
                 return Ok(new_name);
             }
         }
@@ -202,7 +201,7 @@ impl RemoteFs {
         mode: FileMode,
         dev: FileDev,
     ) -> OperationResult<String> {
-        self.store.inner.increment_content_version(parent_id)?;
+        self.store.increment_content_version(parent_id)?;
 
         Ok(self
             .store
@@ -216,7 +215,7 @@ impl RemoteFs {
         name: &str,
         link: &str,
     ) -> OperationResult<String> {
-        self.store.inner.increment_content_version(parent_id)?;
+        self.store.increment_content_version(parent_id)?;
 
         Ok(self
             .store
@@ -230,7 +229,7 @@ impl RemoteFs {
         name: &str,
         mode: FileMode,
     ) -> OperationResult<String> {
-        self.store.inner.increment_content_version(parent_id)?;
+        self.store.increment_content_version(parent_id)?;
 
         Ok(self
             .store
@@ -238,8 +237,8 @@ impl RemoteFs {
     }
 
     fn remove_file(&mut self, id: &str, timestamp: Timespec) -> OperationResult<()> {
-        let dirent = self.query_file(id)?;
-        self.store.inner.increment_content_version(&dirent.parent)?;
+        let dirent = self.store.query_file(id)?;
+        self.store.increment_content_version(&dirent.parent)?;
 
         self.store.remove_file(id, timestamp)?;
 
@@ -247,10 +246,10 @@ impl RemoteFs {
     }
 
     fn remove_directory(&mut self, id: &str, timestamp: Timespec) -> OperationResult<()> {
-        let dirent = self.query_file(id)?;
-        self.store.inner.increment_content_version(&dirent.parent)?;
+        let dirent = self.store.query_file(id)?;
+        self.store.increment_content_version(&dirent.parent)?;
 
-        if self.store.inner.any_child_exists(id)? {
+        if self.store.any_child_exists(id)? {
             return Err(OperationError::directory_not_empty());
         }
         self.store.remove_directory(id, timestamp)?;
@@ -265,10 +264,10 @@ impl RemoteFs {
         new_parent: &str,
         new_name: &str,
     ) -> OperationResult<()> {
-        let dirent = self.query_file(id)?;
-        self.store.inner.increment_content_version(&dirent.parent)?;
-        self.store.inner.increment_content_version(&new_parent)?;
-        self.store.inner.increment_dirent_version(id)?;
+        let dirent = self.store.query_file(id)?;
+        self.store.increment_content_version(&dirent.parent)?;
+        self.store.increment_content_version(&new_parent)?;
+        self.store.increment_dirent_version(id)?;
 
         self.store.rename(id, timestamp, new_parent, new_name)?;
 
@@ -287,9 +286,9 @@ impl RemoteFs {
         mtim: Option<Timespec>,
     ) -> OperationResult<()> {
         if size.is_some() {
-            self.store.inner.increment_content_version(id)?;
+            self.store.increment_content_version(id)?;
         } else {
-            self.store.inner.increment_dirent_version(id)?;
+            self.store.increment_dirent_version(id)?;
         }
 
         self.store
@@ -305,7 +304,7 @@ impl RemoteFs {
         offset: usize,
         data: &[u8],
     ) -> OperationResult<()> {
-        self.store.inner.increment_content_version(id)?;
+        self.store.increment_content_version(id)?;
 
         self.store.write(id, timestamp, offset, data)?;
 
@@ -507,7 +506,7 @@ impl OperationHandler for RemoteFs {
         let mut size = operation.size;
 
         if size.is_some() {
-            let dirent = self.query_file(id)?;
+            let dirent = self.store.query_file(id)?;
 
             if dirent.stat.has_size() {
                 check_content_version!(id, dirent, content_version);
@@ -539,7 +538,7 @@ impl OperationHandler for RemoteFs {
         operation: &WriteOperation,
     ) -> OperationResult<()> {
         {
-            let dirent = self.query_file(id)?;
+            let dirent = self.store.query_file(id)?;
             check_content_version!(id, dirent, content_version);
         }
 

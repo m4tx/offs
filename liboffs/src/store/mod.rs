@@ -377,7 +377,7 @@ impl<IdT: IdGenerator> Store<IdT> {
         )?)
     }
 
-    pub fn add_or_replace_item(&self, dirent: &DirEntity) -> OperationResult<()> {
+    pub fn add_or_replace_dirent(&self, dirent: &DirEntity) -> OperationResult<()> {
         let parent = if dirent.id == ROOT_ID {
             &Null as &dyn ToSql
         } else {

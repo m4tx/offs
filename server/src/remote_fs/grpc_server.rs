@@ -41,7 +41,6 @@ impl RemoteFs for RemoteFsServerImpl {
             .read()
             .await
             .store
-            .inner
             .list_files(&request.into_inner().id)?
             .into_iter()
             .map(|x| DirEntity::from(x));
@@ -64,7 +63,6 @@ impl RemoteFs for RemoteFsServerImpl {
             .read()
             .await
             .store
-            .inner
             .get_chunks(&request.into_inner().id)?;
 
         let resp = ListChunksResult {
@@ -86,7 +84,6 @@ impl RemoteFs for RemoteFsServerImpl {
             .read()
             .await
             .store
-            .inner
             .get_blobs(request.into_inner().id)?
             .into_iter()
             .map(|(k, v)| Blob { id: k, content: v });
@@ -106,17 +103,17 @@ impl RemoteFs for RemoteFsServerImpl {
     ) -> Result<Response<DirEntity>, Status> {
         let dir_entity = {
             let mut fs = self.fs.write().await;
-            let transaction = fs.store.inner.transaction();
+            let transaction = fs.store.transaction();
 
             let operation: offs::modify_op::ModifyOperation = request.into_inner().into();
-            let dir_entity = fs.store.inner.query_file(&operation.id)?;
+            let dir_entity = fs.store.try_query_file(&operation.id)?;
 
             let new_id = OperationApplier::apply_operation(fs.deref_mut(), &operation)?;
 
             let dir_entity = match operation.operation {
                 ModifyOperationContent::RemoveFileOperation(_)
                 | ModifyOperationContent::RemoveDirectoryOperation(_) => dir_entity.unwrap(),
-                _ => fs.query_file(&new_id)?,
+                _ => fs.store.query_file(&new_id)?,
             };
 
             transaction.commit().unwrap();
@@ -140,7 +137,7 @@ impl RemoteFs for RemoteFsServerImpl {
 
         let result = {
             let mut fs = self.fs.write().await;
-            let transaction = fs.store.inner.transaction();
+            let transaction = fs.store.transaction();
 
             let result =
                 fs.apply_full_journal(converted_operations, converted_chunks, converted_blobs);
@@ -163,7 +160,6 @@ impl RemoteFs for RemoteFsServerImpl {
             .read()
             .await
             .store
-            .inner
             .get_missing_blobs(request.into_inner().id)?;
 
         let resp = GetMissingBlobsResult {

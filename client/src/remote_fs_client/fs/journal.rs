@@ -26,17 +26,16 @@ impl OffsFilesystem {
             return Ok(());
         }
 
-        let transaction = self.store.inner.transaction();
+        let transaction = self.store.transaction();
 
         for (i, id) in assigned_ids.iter().enumerate() {
             self.store
-                .inner
                 .change_id(&LocalTempIdGenerator::get_nth_id(i), id)?;
         }
         for mut dirent in dir_entities {
             self.add_dirent(&mut dirent)?;
         }
-        self.store.inner.clear_journal()?;
+        self.store.clear_journal()?;
 
         transaction.commit().unwrap();
 
@@ -89,7 +88,6 @@ impl OffsFilesystem {
     fn prepare_ops_to_send(&mut self) -> Result<Vec<ModifyOperation>> {
         Ok(self
             .store
-            .inner
             .get_journal()?
             .into_iter()
             .map(|x| {
@@ -102,21 +100,20 @@ impl OffsFilesystem {
     fn prepare_chunks_to_send(&mut self) -> Result<Vec<Vec<String>>> {
         Ok(self
             .store
-            .inner
             .get_temp_file_ids()
-            .map(|id| self.store.inner.get_chunks(&id).unwrap())
+            .map(|id| self.store.get_chunks(&id).unwrap())
             .collect())
     }
 
     async fn prepare_blobs_to_send(&mut self) -> Result<Vec<Vec<u8>>> {
-        let blobs_used = self.store.inner.get_temp_chunks()?;
+        let blobs_used = self.store.get_temp_chunks()?;
         let blob_ids_to_send = self.client.get_server_missing_blobs(blobs_used).await?;
-        let blobs_to_send = self.store.inner.get_blobs(&blob_ids_to_send)?;
+        let blobs_to_send = self.store.get_blobs(&blob_ids_to_send)?;
         Ok(blobs_to_send.into_iter().map(|(_, v)| v).collect_vec())
     }
 
     fn recreate_conflicting_files(&mut self, ids: Vec<String>) -> Result<()> {
-        let transaction = self.store.inner.transaction();
+        let transaction = self.store.transaction();
 
         for id in ids {
             self.recreate_conflicting_file(&id)?;
@@ -128,8 +125,8 @@ impl OffsFilesystem {
     }
 
     fn recreate_conflicting_file(&mut self, id: &String) -> Result<()> {
-        self.store.inner.remove_file_from_journal(&id)?;
-        let new_id = self.store.inner.assign_temp_id(&id)?;
+        self.store.remove_file_from_journal(&id)?;
+        let new_id = self.store.assign_temp_id(&id)?;
 
         let dirent = self.store.query_file(&new_id)?;
         let parent_dirent = self.store.query_file(&dirent.parent)?;
@@ -137,13 +134,11 @@ impl OffsFilesystem {
         let recreate_file_op = ModifyOpBuilder::make_recreate_file_op(&parent_dirent, &dirent);
         let recreate_file_op_proto: proto_types::ModifyOperation = recreate_file_op.into();
         self.store
-            .inner
             .add_journal_entry(&dirent.parent, &recreate_file_op_proto.encode_to_vec())?;
 
         let reset_attributes_op = ModifyOpBuilder::make_reset_attributes_op(&dirent);
         let reset_attributes_op_proto: proto_types::ModifyOperation = reset_attributes_op.into();
         self.store
-            .inner
             .add_journal_entry(&new_id, &reset_attributes_op_proto.encode_to_vec())?;
 
         Ok(())

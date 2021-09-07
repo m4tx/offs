@@ -3,14 +3,14 @@ use std::collections::HashMap;
 use std::iter;
 
 use crate::errors::{OperationError, OperationResult};
-use crate::store::id_generator::IdGenerator;
-use crate::store::{DirEntity, FileDev, FileMode, FileType, Store};
+use crate::store::id_generator::{IdGenerator, LocalTempIdGenerator, RandomHexIdGenerator};
+use crate::store::{DirEntity, FileDev, FileMode, FileType, Store, Transaction};
 use crate::timespec::Timespec;
 use crate::BLOB_SIZE;
 
 #[derive(Clone)]
 pub struct StoreWrapper<T: IdGenerator> {
-    pub inner: Store<T>,
+    inner: Store<T>,
 }
 
 impl<IdT: IdGenerator> StoreWrapper<IdT> {
@@ -19,10 +19,43 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
     }
 
     // Read
+    pub fn try_query_file(&self, id: &str) -> OperationResult<Option<DirEntity>> {
+        self.inner.query_file(id)
+    }
+
     pub fn query_file(&self, id: &str) -> OperationResult<DirEntity> {
         self.inner
             .query_file(id)?
             .ok_or(OperationError::file_does_not_exist(&format!("id={}", id)))
+    }
+
+    pub fn try_query_file_by_name(
+        &self,
+        parent_id: &str,
+        name: &str,
+    ) -> OperationResult<Option<DirEntity>> {
+        self.inner.query_file_by_name(parent_id, name)
+    }
+
+    pub fn query_file_by_name(&self, parent_id: &str, name: &str) -> OperationResult<DirEntity> {
+        self.inner
+            .query_file_by_name(parent_id, name)?
+            .ok_or(OperationError::file_does_not_exist(&format!(
+                "parent={}, name={}",
+                parent_id, name
+            )))
+    }
+
+    pub fn file_exists_by_name(&self, parent_id: &str, name: &str) -> OperationResult<bool> {
+        Ok(self.inner.file_exists_by_name(parent_id, name)?)
+    }
+
+    pub fn any_child_exists(&self, id: &str) -> OperationResult<bool> {
+        Ok(self.inner.any_child_exists(id)?)
+    }
+
+    pub fn list_files(&self, parent_id: &str) -> OperationResult<Vec<DirEntity>> {
+        Ok(self.inner.list_files(parent_id)?)
     }
 
     fn get_start_end_chunks(offset: i64, size: u32, chunk_num: usize) -> (usize, usize) {
@@ -70,6 +103,33 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         }
 
         vec
+    }
+
+    pub fn get_blobs<T: IntoIterator>(&self, ids: T) -> OperationResult<HashMap<String, Vec<u8>>>
+    where
+        T::Item: AsRef<str>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        Ok(self.inner.get_blobs(ids)?)
+    }
+
+    pub fn get_missing_blobs<T: IntoIterator>(&self, ids: T) -> OperationResult<Vec<String>>
+    where
+        T::Item: AsRef<str>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        Ok(self.inner.get_missing_blobs(ids)?)
+    }
+
+    pub fn get_chunks(&self, id: &str) -> OperationResult<Vec<String>> {
+        Ok(self.inner.get_chunks(id)?)
+    }
+
+    pub fn add_blobs(
+        &self,
+        blobs: impl IntoIterator<Item = impl AsRef<[u8]>>,
+    ) -> OperationResult<()> {
+        Ok(self.inner.add_blobs(blobs)?)
     }
 
     fn get_blobs_for_read(
@@ -126,6 +186,14 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
     }
 
     // Create
+    pub fn create_default_root_directory(&mut self) -> OperationResult<()> {
+        Ok(self.inner.create_default_root_directory()?)
+    }
+
+    pub fn add_or_replace_dirent(&self, dirent: &DirEntity) -> OperationResult<()> {
+        Ok(self.inner.add_or_replace_dirent(dirent)?)
+    }
+
     pub fn create_file(
         &mut self,
         parent_id: &str,
@@ -196,6 +264,10 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
     }
 
     // Modify
+    pub fn change_id(&self, old_id: &str, new_id: &str) -> OperationResult<()> {
+        Ok(self.inner.change_id(old_id, new_id)?)
+    }
+
     pub fn rename(
         &mut self,
         id: &str,
@@ -350,5 +422,86 @@ impl<IdT: IdGenerator> StoreWrapper<IdT> {
         self.update_time(id, timestamp, false, true, true)?;
 
         Ok(())
+    }
+
+    pub fn add_blob(&self, data: &[u8]) -> OperationResult<String> {
+        Ok(self.inner.add_blob(data)?)
+    }
+
+    pub fn replace_chunks<T: AsRef<str>>(
+        &self,
+        id: &str,
+        chunks: impl IntoIterator<Item = (usize, T)>,
+    ) -> OperationResult<()> {
+        Ok(self.inner.replace_chunks(id, chunks)?)
+    }
+
+    // Misc
+    pub fn transaction(&self) -> Transaction {
+        self.inner.transaction()
+    }
+}
+
+impl StoreWrapper<RandomHexIdGenerator> {
+    // Modify
+    pub fn increment_dirent_version(&mut self, id: &str) -> OperationResult<()> {
+        Ok(self.inner.increment_dirent_version(id)?)
+    }
+
+    pub fn increment_content_version(&mut self, id: &str) -> OperationResult<()> {
+        Ok(self.inner.increment_content_version(id)?)
+    }
+}
+
+impl StoreWrapper<LocalTempIdGenerator> {
+    // Read
+    pub fn get_temp_chunks(&mut self) -> OperationResult<Vec<String>> {
+        Ok(self.inner.get_temp_chunks()?)
+    }
+
+    pub fn get_temp_file_ids(&self) -> impl Iterator<Item = String> {
+        self.inner.get_temp_file_ids()
+    }
+
+    // Modify
+    pub fn update_retrieved_version(&self, id: &str) -> OperationResult<()> {
+        Ok(self.inner.update_retrieved_version(id)?)
+    }
+
+    pub fn remove_remaining_files<T: IntoIterator>(
+        &self,
+        parent_id: &str,
+        to_keep: T,
+    ) -> OperationResult<()>
+    where
+        T::Item: AsRef<str>,
+        T::IntoIter: ExactSizeIterator,
+    {
+        Ok(self.inner.remove_remaining_files(parent_id, to_keep)?)
+    }
+
+    pub fn assign_temp_id(&mut self, id: &str) -> OperationResult<String> {
+        Ok(self.inner.assign_temp_id(id)?)
+    }
+
+    // Journal
+    pub fn add_journal_entry(&self, id: &str, operation: &[u8]) -> OperationResult<i64> {
+        Ok(self.inner.add_journal_entry(id, operation)?)
+    }
+
+    pub fn get_journal(&self) -> OperationResult<Vec<Vec<u8>>> {
+        Ok(self.inner.get_journal()?)
+    }
+
+    pub fn clear_journal(&mut self) -> OperationResult<()> {
+        Ok(self.inner.clear_journal()?)
+    }
+
+    pub fn remove_file_from_journal(&self, id: &str) -> OperationResult<()> {
+        Ok(self.inner.remove_file_from_journal(id)?)
+    }
+
+    pub fn remove_journal_item(&self, id: i64) -> OperationResult<()> {
+        Ok(self.inner.remove_journal_item(id)?)
     }
 }

@@ -53,7 +53,7 @@ impl OffsFilesystem {
         };
 
         // Request the root attributes
-        fs.store.inner.create_default_root_directory()?;
+        fs.store.create_default_root_directory()?;
         fs.update_dirent(ROOT_ID, true).await?;
 
         if !fs.is_offline() {
@@ -63,14 +63,8 @@ impl OffsFilesystem {
         Ok(fs)
     }
 
-    pub(super) fn query_file_by_name(&self, parent_id: &str, name: &str) -> Result<DirEntity> {
-        self.store.inner.query_file_by_name(parent_id, name)?.ok_or(
-            OperationError::file_does_not_exist(&format!("parent={}, name={}", parent_id, name)),
-        )
-    }
-
     pub(super) fn add_dirent(&mut self, dirent: &mut DirEntity) -> Result<()> {
-        self.store.inner.add_or_replace_item(&dirent)?;
+        self.store.add_or_replace_dirent(&dirent)?;
         Ok(())
     }
 
@@ -90,9 +84,9 @@ impl OffsFilesystem {
 
             let blobs = self.client.get_blobs(ids).await?;
 
-            let transaction = self.store.inner.transaction();
+            let transaction = self.store.transaction();
             for (_, blob) in &blobs {
-                self.store.inner.add_blob(blob)?;
+                self.store.add_blob(blob)?;
             }
             transaction.commit()?;
         };
@@ -111,10 +105,8 @@ impl OffsFilesystem {
         }
 
         let chunks = self.client.get_chunks(id).await?;
-        self.store
-            .inner
-            .replace_chunks(id, chunks.iter().enumerate())?;
-        self.store.inner.update_retrieved_version(id)?;
+        self.store.replace_chunks(id, chunks.iter().enumerate())?;
+        self.store.update_retrieved_version(id)?;
 
         Ok(())
     }

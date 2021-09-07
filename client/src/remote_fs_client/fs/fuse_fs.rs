@@ -180,7 +180,8 @@ impl Filesystem for FuseOffsFilesystem {
             // Make sure the file entry is up to date
             try_fs!(fs.list_files(&parent_id).await, reply);
             let item = try_fs!(
-                fs.query_file_by_name(&parent_id, try_fs!(Self::check_os_str(&name), reply)),
+                fs.store
+                    .query_file_by_name(&parent_id, try_fs!(Self::check_os_str(&name), reply)),
                 reply
             );
 
@@ -367,7 +368,8 @@ impl Filesystem for FuseOffsFilesystem {
             let mut fs = fs.write().await;
 
             let item = try_fs!(
-                fs.query_file_by_name(&parent_id, try_fs!(Self::check_os_str(&name), reply)),
+                fs.store
+                    .query_file_by_name(&parent_id, try_fs!(Self::check_os_str(&name), reply)),
                 reply
             );
 
@@ -390,7 +392,8 @@ impl Filesystem for FuseOffsFilesystem {
             let mut fs = fs.write().await;
 
             let item = try_fs!(
-                fs.query_file_by_name(&parent_id, try_fs!(Self::check_os_str(&name), reply)),
+                fs.store
+                    .query_file_by_name(&parent_id, try_fs!(Self::check_os_str(&name), reply)),
                 reply
             );
 
@@ -467,7 +470,8 @@ impl Filesystem for FuseOffsFilesystem {
             let mut fs = fs.write().await;
 
             let item = try_fs!(
-                fs.query_file_by_name(&old_parent_id, try_fs!(Self::check_os_str(&name), reply)),
+                fs.store
+                    .query_file_by_name(&old_parent_id, try_fs!(Self::check_os_str(&name), reply)),
                 reply
             );
 

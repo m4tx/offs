@@ -50,19 +50,19 @@ impl OffsFilesystem {
                 err_offline!();
             }
 
-            return Ok(self.store.inner.list_files(id)?);
+            return Ok(self.store.list_files(id)?);
         }
 
         let mut items = self.client.list_files(id).await?;
 
-        let transaction = self.store.inner.transaction();
+        let transaction = self.store.transaction();
         for dirent in &mut items {
             self.add_dirent(dirent)?;
         }
-        self.store.inner.update_retrieved_version(id)?;
+        self.store.update_retrieved_version(id)?;
 
         let children_ids = items.iter().map(|x| &x.id);
-        self.store.inner.remove_remaining_files(id, children_ids)?;
+        self.store.remove_remaining_files(id, children_ids)?;
 
         transaction.commit()?;
 
@@ -90,20 +90,20 @@ impl OffsFilesystem {
         let id = operation.id.clone();
         let serialized_op = proto_types::ModifyOperation::from(operation.clone()).encode_to_vec();
 
-        let transaction = self.store.inner.transaction();
+        let transaction = self.store.transaction();
 
         let new_id = self.apply_operation(&operation)?;
 
-        let journal_entry_id = self.store.inner.add_journal_entry(&id, &serialized_op)?;
+        let journal_entry_id = self.store.add_journal_entry(&id, &serialized_op)?;
         let dirent = if self.is_offline() {
             self.store.query_file(&new_id)?
         } else {
             let mut dirent = self.client.request_apply_operation(operation).await?;
-            self.store.inner.remove_journal_item(journal_entry_id)?;
+            self.store.remove_journal_item(journal_entry_id)?;
 
             if !dirent.id.is_empty() {
                 if new_id != dirent.id {
-                    self.store.inner.change_id(&new_id, &dirent.id)?;
+                    self.store.change_id(&new_id, &dirent.id)?;
                 }
                 self.add_dirent(&mut dirent)?;
             }
