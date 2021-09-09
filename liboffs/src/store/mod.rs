@@ -38,7 +38,7 @@ impl Store<RandomHexIdGenerator> {
         Ok(Self::new_with_random_id_generator(db_path)?)
     }
 
-    pub fn increment_dirent_version(&mut self, id: &str) -> OperationResult<()> {
+    pub fn increment_dirent_version(&self, id: &str) -> OperationResult<()> {
         self.connection.lock().unwrap().execute(
             "UPDATE file SET dirent_version = dirent_version + 1 WHERE id = ?",
             params![id],
@@ -47,7 +47,7 @@ impl Store<RandomHexIdGenerator> {
         Ok(())
     }
 
-    pub fn increment_content_version(&mut self, id: &str) -> OperationResult<()> {
+    pub fn increment_content_version(&self, id: &str) -> OperationResult<()> {
         self.connection.lock().unwrap().execute(
             r#"
                 UPDATE file
@@ -69,7 +69,7 @@ impl Store<LocalTempIdGenerator> {
     }
 
     pub fn new_client(db_path: impl AsRef<std::path::Path>) -> OperationResult<Self> {
-        let mut store = Self::new_with_local_temp_id_generator(db_path)?;
+        let store = Self::new_with_local_temp_id_generator(db_path)?;
 
         store
             .connection
@@ -82,7 +82,7 @@ impl Store<LocalTempIdGenerator> {
         Ok(store)
     }
 
-    fn get_next_temp_id(&mut self) -> OperationResult<usize> {
+    fn get_next_temp_id(&self) -> OperationResult<usize> {
         let connection = self.connection.lock().unwrap();
         let mut stmt = connection
             .prepare("SELECT id FROM file WHERE id LIKE 'temp-%' ORDER BY id DESC LIMIT 1")?;
@@ -97,7 +97,7 @@ impl Store<LocalTempIdGenerator> {
         Ok(result)
     }
 
-    pub fn get_temp_chunks(&mut self) -> OperationResult<Vec<String>> {
+    pub fn get_temp_chunks(&self) -> OperationResult<Vec<String>> {
         let connection = self.connection.lock().unwrap();
         let mut stmt = connection.prepare(
             r#"

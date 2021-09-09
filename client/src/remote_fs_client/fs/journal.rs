@@ -1,21 +1,23 @@
 use std::sync::atomic::Ordering;
 
 use itertools::Itertools;
+use log::info;
 use prost::Message;
 
-use offs::errors::{JournalApplyData, JournalApplyError};
+use offs::errors::{JournalApplyData, JournalApplyError, OperationResult};
 use offs::modify_op::ModifyOperation;
 use offs::proto::filesystem as proto_types;
 use offs::store::id_generator::LocalTempIdGenerator;
 
 use super::super::client::modify_op_builder::ModifyOpBuilder;
 use super::OffsFilesystem;
-use super::Result;
 
 const JOURNAL_MAX_RETRIES: u32 = 10;
 
 impl OffsFilesystem {
-    pub(super) async fn apply_journal(&mut self) -> Result<()> {
+    pub(super) async fn apply_journal(&mut self) -> OperationResult<()> {
+        info!("Applying journal");
+
         let JournalApplyData {
             assigned_ids,
             dir_entities,
@@ -39,10 +41,12 @@ impl OffsFilesystem {
 
         transaction.commit().unwrap();
 
+        info!("Done applying journal");
+
         Ok(())
     }
 
-    async fn prepare_and_send_journal(&mut self) -> Result<JournalApplyData> {
+    async fn prepare_and_send_journal(&mut self) -> OperationResult<JournalApplyData> {
         for _ in 0..JOURNAL_MAX_RETRIES {
             let result = self.try_prepare_and_send_journal().await?;
             if let Some(journal_apply_data) = result {
@@ -56,9 +60,10 @@ impl OffsFilesystem {
         );
     }
 
-    async fn try_prepare_and_send_journal(&mut self) -> Result<Option<JournalApplyData>> {
+    async fn try_prepare_and_send_journal(&mut self) -> OperationResult<Option<JournalApplyData>> {
         let ops = self.prepare_ops_to_send()?;
         if ops.is_empty() {
+            info!("No journal entries, skipping");
             return Ok(Some(Default::default()));
         }
         let chunks = self.prepare_chunks_to_send()?;
@@ -85,7 +90,7 @@ impl OffsFilesystem {
         Ok(None)
     }
 
-    fn prepare_ops_to_send(&mut self) -> Result<Vec<ModifyOperation>> {
+    fn prepare_ops_to_send(&mut self) -> OperationResult<Vec<ModifyOperation>> {
         Ok(self
             .store
             .get_journal()?
@@ -97,7 +102,7 @@ impl OffsFilesystem {
             .collect_vec())
     }
 
-    fn prepare_chunks_to_send(&mut self) -> Result<Vec<Vec<String>>> {
+    fn prepare_chunks_to_send(&mut self) -> OperationResult<Vec<Vec<String>>> {
         Ok(self
             .store
             .get_temp_file_ids()
@@ -105,14 +110,14 @@ impl OffsFilesystem {
             .collect())
     }
 
-    async fn prepare_blobs_to_send(&mut self) -> Result<Vec<Vec<u8>>> {
+    async fn prepare_blobs_to_send(&mut self) -> OperationResult<Vec<Vec<u8>>> {
         let blobs_used = self.store.get_temp_chunks()?;
         let blob_ids_to_send = self.client.get_server_missing_blobs(blobs_used).await?;
         let blobs_to_send = self.store.get_blobs(&blob_ids_to_send)?;
         Ok(blobs_to_send.into_iter().map(|(_, v)| v).collect_vec())
     }
 
-    fn recreate_conflicting_files(&mut self, ids: Vec<String>) -> Result<()> {
+    fn recreate_conflicting_files(&mut self, ids: Vec<String>) -> OperationResult<()> {
         let transaction = self.store.transaction();
 
         for id in ids {
@@ -124,7 +129,7 @@ impl OffsFilesystem {
         Ok(())
     }
 
-    fn recreate_conflicting_file(&mut self, id: &String) -> Result<()> {
+    fn recreate_conflicting_file(&mut self, id: &String) -> OperationResult<()> {
         self.store.remove_file_from_journal(&id)?;
         let new_id = self.store.assign_temp_id(&id)?;
 

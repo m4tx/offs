@@ -17,8 +17,7 @@ use offs::timespec::Timespec;
 
 use super::errors::to_os_error;
 use super::OffsFilesystem;
-use super::Result;
-use offs::errors::OperationError;
+use offs::errors::{OperationError, OperationResult};
 use offs::ROOT_ID;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -69,7 +68,7 @@ impl FuseHelper {
         self.ids_to_inodes.borrow()[id]
     }
 
-    fn get_id_by_inode(&self, inode: u64) -> Result<String> {
+    fn get_id_by_inode(&self, inode: u64) -> OperationResult<String> {
         self.inodes_to_ids
             .borrow()
             .get(&inode)
@@ -133,7 +132,7 @@ impl FuseOffsFilesystem {
 }
 
 impl FuseOffsFilesystem {
-    fn check_os_str(string: &OsStr) -> Result<&str> {
+    fn check_os_str(string: &OsStr) -> OperationResult<&str> {
         string.to_str().ok_or(OperationError::invalid_unicode())
     }
 

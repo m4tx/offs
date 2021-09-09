@@ -8,6 +8,7 @@ use crate::store::{DirEntity, FileDev, FileMode, FileType, Store, Transaction};
 use crate::timespec::Timespec;
 use crate::BLOB_SIZE;
 
+/// High-level wrapper over Store, providing slightly easier-to-use interface
 #[derive(Clone)]
 pub struct StoreWrapper<T: IdGenerator> {
     inner: Store<T>,

@@ -1,7 +1,6 @@
 use itertools::Itertools;
 
-use crate::remote_fs_client::fs::Result;
-use offs::errors::JournalApplyResult;
+use offs::errors::{JournalApplyResult, OperationResult};
 use offs::modify_op::ModifyOperation;
 use offs::proto::filesystem as proto_types;
 use offs::proto::filesystem::remote_fs_client::RemoteFsClient;
@@ -15,7 +14,7 @@ pub struct RemoteFsGrpcClient {
 }
 
 impl RemoteFsGrpcClient {
-    pub async fn new(address: &str) -> Result<Self> {
+    pub async fn new(address: &str) -> OperationResult<Self> {
         let client = RemoteFsClient::connect(format!("http://{}", address))
             .await
             .unwrap();
@@ -24,7 +23,7 @@ impl RemoteFsGrpcClient {
     }
 
     // Listing
-    pub async fn list_files(&mut self, dir_id: &str) -> Result<Vec<DirEntity>> {
+    pub async fn list_files(&mut self, dir_id: &str) -> OperationResult<Vec<DirEntity>> {
         let req = ListRequest {
             id: dir_id.to_owned(),
         };
@@ -39,14 +38,14 @@ impl RemoteFsGrpcClient {
         Ok(res)
     }
 
-    pub async fn get_chunks(&mut self, id: &str) -> Result<Vec<String>> {
+    pub async fn get_chunks(&mut self, id: &str) -> OperationResult<Vec<String>> {
         let req = ListChunksRequest { id: id.to_owned() };
 
         let resp = self.client.list_chunks(req).await?.into_inner();
         Ok(resp.blob_id)
     }
 
-    pub async fn get_blobs(&mut self, ids: Vec<String>) -> Result<Vec<(String, Vec<u8>)>> {
+    pub async fn get_blobs(&mut self, ids: Vec<String>) -> OperationResult<Vec<(String, Vec<u8>)>> {
         let req = GetBlobsRequest { id: ids.into() };
 
         let mut stream = self.client.get_blobs(req).await?.into_inner();
@@ -63,7 +62,7 @@ impl RemoteFsGrpcClient {
     pub async fn request_apply_operation(
         &mut self,
         modify_operation: ModifyOperation,
-    ) -> Result<DirEntity> {
+    ) -> OperationResult<DirEntity> {
         let result = self
             .client
             .apply_operation(offs::proto::filesystem::ModifyOperation::from(
@@ -80,7 +79,7 @@ impl RemoteFsGrpcClient {
         journal: Vec<ModifyOperation>,
         chunks: Vec<Vec<String>>,
         blobs: Vec<Vec<u8>>,
-    ) -> Result<JournalApplyResult> {
+    ) -> OperationResult<JournalApplyResult> {
         let converted_journal: Vec<proto_types::ModifyOperation> =
             journal.into_iter().map(|x| x.into()).collect_vec();
         let converted_chunks: Vec<proto_types::FileChunks> =
@@ -96,7 +95,10 @@ impl RemoteFsGrpcClient {
         Ok(result.into())
     }
 
-    pub async fn get_server_missing_blobs(&mut self, ids: Vec<String>) -> Result<Vec<String>> {
+    pub async fn get_server_missing_blobs(
+        &mut self,
+        ids: Vec<String>,
+    ) -> OperationResult<Vec<String>> {
         let req = GetMissingBlobsRequest { id: ids.into() };
 
         let result = self.client.get_missing_blobs(req).await?.into_inner();

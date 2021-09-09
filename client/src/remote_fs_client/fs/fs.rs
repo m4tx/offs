@@ -11,8 +11,6 @@ use super::super::client::grpc_client::RemoteFsGrpcClient;
 use crate::remote_fs_client::fs::open_file_handler::OpenFileHandler;
 use offs::errors::{OperationError, OperationResult};
 
-pub type Result<T> = OperationResult<T>;
-
 macro_rules! err_offline {
     () => {
         return Err(OperationError::offline("The client is currently offline"));
@@ -42,7 +40,7 @@ impl OffsFilesystem {
         offline_mode: Arc<AtomicBool>,
         should_flush_journal: Arc<AtomicBool>,
         store: Store<LocalTempIdGenerator>,
-    ) -> Result<Self> {
+    ) -> OperationResult<Self> {
         let mut fs = Self {
             client: RemoteFsGrpcClient::new(&format!("{}", address)).await?,
             offline_mode,
@@ -63,7 +61,7 @@ impl OffsFilesystem {
         Ok(fs)
     }
 
-    pub(super) fn add_dirent(&mut self, dirent: &mut DirEntity) -> Result<()> {
+    pub(super) fn add_dirent(&mut self, dirent: &mut DirEntity) -> OperationResult<()> {
         self.store.add_or_replace_dirent(&dirent)?;
         Ok(())
     }
@@ -72,13 +70,13 @@ impl OffsFilesystem {
         &mut self,
         id: &str,
         update_atime: bool,
-    ) -> Result<DirEntity> {
+    ) -> OperationResult<DirEntity> {
         let atime = if update_atime { Some(now()) } else { None };
         self.set_attributes(id, None, None, None, None, atime, None)
             .await
     }
 
-    pub(super) async fn retrieve_missing_blobs(&mut self, ids: Vec<String>) -> Result<()> {
+    pub(super) async fn retrieve_missing_blobs(&mut self, ids: Vec<String>) -> OperationResult<()> {
         if !ids.is_empty() {
             check_online!(self);
 
@@ -94,7 +92,7 @@ impl OffsFilesystem {
         Ok(())
     }
 
-    pub(super) async fn update_chunks(&mut self, id: &str) -> Result<()> {
+    pub(super) async fn update_chunks(&mut self, id: &str) -> OperationResult<()> {
         if self.is_offline() {
             let dirent = self.store.query_file(id)?;
             if dirent.stat.size != 0 && !dirent.is_up_to_date() {
